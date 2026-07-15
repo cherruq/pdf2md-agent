@@ -10,6 +10,7 @@ from pathlib import Path
 
 from convertpdf.cache import CacheLayout, write_meta
 from convertpdf.crew.runner import run_pipeline
+from convertpdf.pages import parse_page_spec
 from convertpdf.pdf_renderer import render_pdf
 from convertpdf.vision import make_vision_llm
 
@@ -36,6 +37,18 @@ def build_parser() -> argparse.ArgumentParser:
             "150 (text + tables), "
             "200 (small fonts / dense formulas), "
             "300+ (print, usually overkill for vision models)."
+        ),
+    )
+    cv.add_argument(
+        "-p", "--pages",
+        type=parse_page_spec,
+        default=None,
+        metavar="SPEC",
+        help=(
+            "Subset of pages to convert. Accepts comma-separated pages and "
+            "ranges, e.g. '1-5,8,11-13'. Pages are 1-based; output preserves "
+            "original page numbers and is ordered by document position. "
+            "Default: all pages."
         ),
     )
     cv.add_argument(
