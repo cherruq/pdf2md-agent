@@ -49,3 +49,47 @@ def test_render_pdf_higher_dpi_yields_larger_pixels(tmp_path: Path) -> None:
 def test_render_pdf_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(Exception):
         render_pdf(tmp_path / "ghost.pdf", tmp_path / "pages", dpi=72)
+
+
+def test_render_pdf_subset_writes_only_requested_pages(tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path / "tiny.pdf", pages=3)
+    out = tmp_path / "pages"
+    out.mkdir()
+
+    pages = render_pdf(pdf, out, dpi=72, pages=[2])
+
+    assert len(pages) == 1
+    assert pages[0].page_number == 2
+    assert (out / "page_0002.png").exists()
+    assert (out / "page_0002_text.txt").exists()
+    assert not (out / "page_0001.png").exists()
+    assert not (out / "page_0003.png").exists()
+
+
+def test_render_pdf_subset_preserves_original_page_numbers(tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path / "tiny.pdf", pages=5)
+    out = tmp_path / "pages"
+    out.mkdir()
+
+    pages = render_pdf(pdf, out, dpi=72, pages=[3, 1])
+
+    # Sorted ascending in the returned list.
+    assert [p.page_number for p in pages] == [1, 3]
+    # But output filenames use the ORIGINAL page number.
+    assert (out / "page_0001.png").exists()
+    assert (out / "page_0003.png").exists()
+    assert not (out / "page_0002.png").exists()
+    assert not (out / "page_0004.png").exists()
+    assert not (out / "page_0005.png").exists()
+
+
+def test_render_pdf_subset_full_coverage(tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path / "tiny.pdf", pages=2)
+    out = tmp_path / "pages"
+    out.mkdir()
+
+    pages = render_pdf(pdf, out, dpi=72, pages=[1, 2])
+
+    assert [p.page_number for p in pages] == [1, 2]
+    assert (out / "page_0001.png").exists()
+    assert (out / "page_0002.png").exists()
