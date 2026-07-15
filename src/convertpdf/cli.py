@@ -11,7 +11,16 @@ import pymupdf
 from pathlib import Path
 
 from convertpdf.cache import CacheLayout, write_meta
+from convertpdf.config import (
+    FALLBACK_TO_TEXT,
+    RETRY_BACKOFF,
+    RETRY_INITIAL_DELAY,
+    RETRY_JITTER,
+    RETRY_MAX_ATTEMPTS,
+    RETRY_MAX_DELAY,
+)
 from convertpdf.crew.runner import run_pipeline
+from convertpdf.llm_retry import RetryConfig
 from convertpdf.pages import parse_page_spec, resolve_pages
 from convertpdf.pdf_renderer import render_pdf
 from convertpdf.vision import make_vision_llm
@@ -79,6 +88,61 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable feeding the PDF's native text layer to the extractor.",
     )
+    cv.add_argument(
+        "--max-retries",
+        type=int,
+        default=None,
+        help=(
+            "Total LLM call attempts per page (initial + retries). Overrides "
+            "CONVERTPDF_MAX_RETRIES. Default: 4."
+        ),
+    )
+    cv.add_argument(
+        "--retry-initial-delay",
+        type=float,
+        default=None,
+        help=(
+            "Initial retry delay in seconds (exponential backoff). Overrides "
+            "CONVERTPDF_RETRY_INITIAL_DELAY. Default: 1.0."
+        ),
+    )
+    cv.add_argument(
+        "--retry-backoff",
+        type=float,
+        default=None,
+        help=(
+            "Exponential backoff multiplier between retries. Overrides "
+            "CONVERTPDF_RETRY_BACKOFF. Default: 2.0."
+        ),
+    )
+    cv.add_argument(
+        "--retry-max-delay",
+        type=float,
+        default=None,
+        help=(
+            "Per-attempt retry delay cap in seconds. Overrides "
+            "CONVERTPDF_RETRY_MAX_DELAY. Default: 30.0."
+        ),
+    )
+    cv.add_argument(
+        "--retry-jitter",
+        type=float,
+        default=None,
+        help=(
+            "Jitter ratio in [0.0, 1.0] applied to each retry delay to avoid "
+            "thundering-herd. Overrides CONVERTPDF_RETRY_JITTER. Default: 0.25."
+        ),
+    )
+    cv.add_argument(
+        "--no-fallback-to-text",
+        action="store_false",
+        dest="fallback_to_text",
+        default=None,
+        help=(
+            "On retry exhaustion, raise instead of falling back to the PDF's "
+            "native text layer. Default: fallback enabled."
+        ),
+    )
     return parser
 
 
@@ -110,7 +174,43 @@ def _resolve_layout(
     )
 
 
+def _build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
+    """Build a RetryConfig from CLI args (override) + env (fallback). Returns None on invalid input."""
+    try:
+        return RetryConfig(
+            max_attempts=(
+                args.max_retries if args.max_retries is not None else RETRY_MAX_ATTEMPTS
+            ),
+            initial_delay=(
+                args.retry_initial_delay
+                if args.retry_initial_delay is not None
+                else RETRY_INITIAL_DELAY
+            ),
+            backoff=(
+                args.retry_backoff if args.retry_backoff is not None else RETRY_BACKOFF
+            ),
+            max_delay=(
+                args.retry_max_delay
+                if args.retry_max_delay is not None
+                else RETRY_MAX_DELAY
+            ),
+            jitter=(
+                args.retry_jitter if args.retry_jitter is not None else RETRY_JITTER
+            ),
+        )
+    except ValueError as e:
+        print(f"error: invalid retry argument: {e}", file=sys.stderr)
+        return None
+
+
 def cmd_convert(args: argparse.Namespace) -> int:
+    retry_config = _build_retry_config(args)
+    if retry_config is None:
+        return 1
+    fallback_to_text = (
+        args.fallback_to_text if args.fallback_to_text is not None else FALLBACK_TO_TEXT
+    )
+
     if not args.pdf.exists():
         print(f"error: input PDF not found: {args.pdf}", file=sys.stderr)
         return 1
@@ -160,6 +260,15 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
     log.info("running pipeline: extract + format%s", " + summarize" if with_summary else "")
     llm = make_vision_llm()
+    log.info(
+        "  retry:           max_attempts=%d, initial_delay=%.1fs, backoff=%.1fx, max_delay=%.1fs, jitter=±%.0f%%",
+        retry_config.max_attempts,
+        retry_config.initial_delay,
+        retry_config.backoff,
+        retry_config.max_delay,
+        retry_config.jitter * 100,
+    )
+    log.info("  fallback:        %s", "text layer" if fallback_to_text else "off")
     results = run_pipeline(
         pages=pages,
         layout=layout,
@@ -167,6 +276,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
         resume=args.resume,
         text_hint=not args.no_text_hint,
         llm=llm,
+        retry_config=retry_config,
+        fallback_to_text=fallback_to_text,
     )
 
     markdown = "\n\n---\n\n".join(r.markdown for r in results)
