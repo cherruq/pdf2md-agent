@@ -130,6 +130,9 @@ def cmd_convert(args: argparse.Namespace) -> int:
         doc = pymupdf.open(args.pdf)
         try:
             resolved_pages = resolve_pages(args.pages, doc.page_count)
+        except ValueError as e:
+            print(f"error: --pages {args.pages!r}: {e}", file=sys.stderr)
+            return 1
         finally:
             doc.close()
 
