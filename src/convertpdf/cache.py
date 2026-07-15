@@ -1,0 +1,99 @@
+"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs, running summary."""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from convertpdf.pdf_renderer import PageImage
+
+
+@dataclass(frozen=True, slots=True)
+class PageArtifacts:
+    """Files written for one page: source PNG, native text, agent outputs."""
+
+    page_number: int
+    page_png: Path
+    page_text: Path
+    extract_text: Path
+    format_markdown: Path
+
+
+@dataclass(frozen=True, slots=True)
+class CacheLayout:
+    """Directory layout for a PDF's intermediate cache."""
+
+    root: Path
+    pages_dir: Path
+    summary_path: Path
+    meta_path: Path
+
+    @classmethod
+    def for_pdf(cls, root: Path, pdf_path: Path) -> "CacheLayout":
+        root.mkdir(parents=True, exist_ok=True)
+        pages = root / "pages"
+        pages.mkdir(exist_ok=True)
+        return cls(
+            root=root,
+            pages_dir=pages,
+            summary_path=root / "summary.json",
+            meta_path=root / "meta.json",
+        )
+
+    def page_png_path(self, page_number: int) -> Path:
+        return self.pages_dir / f"page_{page_number:04d}.png"
+
+    def page_text_path(self, page_number: int) -> Path:
+        return self.pages_dir / f"page_{page_number:04d}_text.txt"
+
+    def page_extract_path(self, page_number: int) -> Path:
+        return self.pages_dir / f"page_{page_number:04d}_extract.txt"
+
+    def page_format_path(self, page_number: int) -> Path:
+        return self.pages_dir / f"page_{page_number:04d}_format.md"
+
+    def artifacts_for(self, page: PageImage) -> PageArtifacts:
+        return PageArtifacts(
+            page_number=page.page_number,
+            page_png=self.page_png_path(page.page_number),
+            page_text=self.page_text_path(page.page_number),
+            extract_text=self.page_extract_path(page.page_number),
+            format_markdown=self.page_format_path(page.page_number),
+        )
+
+
+def write_meta(meta_path: Path, *, pdf: Path, dpi: int, with_summary: bool) -> None:
+    meta_path.write_text(
+        json.dumps(
+            {
+                "pdf": str(pdf),
+                "dpi": dpi,
+                "with_summary": with_summary,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def read_summary(path: Path) -> str:
+    if not path.exists():
+        return ""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return str(payload.get("summary", ""))
+
+
+def write_summary(path: Path, summary: str) -> None:
+    path.write_text(
+        json.dumps({"summary": summary}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def is_page_complete(layout: CacheLayout, page_number: int) -> bool:
+    """True if the cached extract + format outputs already exist for this page."""
+    return (
+        layout.page_extract_path(page_number).exists()
+        and layout.page_format_path(page_number).exists()
+    )
