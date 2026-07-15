@@ -56,3 +56,8 @@ def test_resolve_rejects_out_of_range() -> None:
         resolve_pages([99], total=10)
     with pytest.raises(ValueError, match=r"page 4 out of range \(PDF has 3 pages\)"):
         resolve_pages([1, 2, 3, 4], total=3)
+
+
+def test_resolve_rejects_zero_total() -> None:
+    with pytest.raises(ValueError, match=r"PDF has 0 pages"):
+        resolve_pages([1], total=0)
