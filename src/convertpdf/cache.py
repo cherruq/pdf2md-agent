@@ -62,13 +62,21 @@ class CacheLayout:
         )
 
 
-def write_meta(meta_path: Path, *, pdf: Path, dpi: int, with_summary: bool) -> None:
+def write_meta(
+    meta_path: Path,
+    *,
+    pdf: Path,
+    dpi: int,
+    with_summary: bool,
+    pages: list[int] | None = None,
+) -> None:
     meta_path.write_text(
         json.dumps(
             {
                 "pdf": str(pdf),
                 "dpi": dpi,
                 "with_summary": with_summary,
+                "pages": pages,
             },
             indent=2,
             ensure_ascii=False,
