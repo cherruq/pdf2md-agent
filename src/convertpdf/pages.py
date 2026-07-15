@@ -1,14 +1,10 @@
-"""Page-spec parsing and resolution for the --pages CLI flag.
+"""Page-spec parsing for the --pages CLI flag.
 
-Two pure functions, no I/O:
+Currently exposes :func:`parse_page_spec`, the ``argparse`` ``type=`` callable
+that validates user input and rejects malformed specs before the PDF is opened.
 
-- :func:`parse_page_spec` is the argparse ``type=`` callable; it validates
-  syntax and raises :class:`argparse.ArgumentTypeError` on bad input so
-  the CLI rejects malformed specs before opening the PDF.
-
-- :func:`resolve_pages` dedupes, sorts, and validates a parsed page list
-  against the PDF's actual page count; raises :class:`ValueError` with a
-  user-facing message on out-of-range pages.
+A companion :func:`resolve_pages` will validate the parsed list against the
+PDF's actual page count; that lives in the next task.
 """
 from __future__ import annotations
 
@@ -78,7 +74,8 @@ def parse_page_spec(spec: str) -> list[int]:
     return pages
 
 
-# Stub for Task 2 — will be fully implemented there.
 def resolve_pages(pages: list[int], total: int) -> list[int]:
-    """Placeholder until Task 2 implements full validation."""
-    raise NotImplementedError("resolve_pages is implemented in Task 2")
+    """Validate parsed page list against the PDF page count. Pending implementation."""
+    raise NotImplementedError(
+        "resolve_pages() is not yet implemented; will be added in a follow-up"
+    )
