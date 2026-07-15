@@ -6,11 +6,13 @@ import logging
 import sys
 import tempfile
 import time
+
+import pymupdf
 from pathlib import Path
 
 from convertpdf.cache import CacheLayout, write_meta
 from convertpdf.crew.runner import run_pipeline
-from convertpdf.pages import parse_page_spec
+from convertpdf.pages import parse_page_spec, resolve_pages
 from convertpdf.pdf_renderer import render_pdf
 from convertpdf.vision import make_vision_llm
 
@@ -119,10 +121,23 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
     layout, render_target = _resolve_layout(args.pdf, args.intermediates_dir, keep_intermediates)
 
+    # Resolve --pages against the PDF's actual page count so out-of-range
+    # errors surface before any rendering work happens.
+    resolved_pages: list[int] | None
+    if args.pages is None:
+        resolved_pages = None
+    else:
+        doc = pymupdf.open(args.pdf)
+        try:
+            resolved_pages = resolve_pages(args.pages, doc.page_count)
+        finally:
+            doc.close()
+
     log.info("converting %s", args.pdf)
     log.info("  output:          %s", args.output)
     log.info("  cache:           %s", layout.root if keep_intermediates else "(tempdir, discarded)")
     log.info("  dpi:             %d", args.dpi)
+    log.info("  pages:           %s", "all" if resolved_pages is None else resolved_pages)
     log.info("  cross-page:      %s", "summary" if with_summary else "independent")
     log.info("  resume:          %s", "yes" if args.resume else "no")
     log.info("  text-hint:       %s", "on" if not args.no_text_hint else "off")
@@ -133,10 +148,11 @@ def cmd_convert(args: argparse.Namespace) -> int:
             pdf=args.pdf,
             dpi=args.dpi,
             with_summary=with_summary,
+            pages=resolved_pages,
         )
 
-    log.info("rendering PDF to PNGs at %d dpi...", args.dpi)
-    pages = render_pdf(args.pdf, render_target, dpi=args.dpi)
+    log.info("rendering PDF to PNGs at %d dpi%s...", args.dpi, " (subset)" if resolved_pages else "")
+    pages = render_pdf(args.pdf, render_target, dpi=args.dpi, pages=resolved_pages)
     log.info("rendered %d page(s) to %s", len(pages), render_target)
 
     log.info("running pipeline: extract + format%s", " + summarize" if with_summary else "")
