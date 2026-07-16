@@ -14,8 +14,6 @@ only to learn its original dimensions for the binary search.
 """
 from __future__ import annotations
 
-import base64
-import io
 import logging
 import math
 from dataclasses import dataclass
@@ -105,7 +103,7 @@ def estimate_image_tokens(path_or_bytes: PathOrBytes, *, mime: str = "image/jpeg
             log.debug("estimate_image_tokens: %s is not a file; assuming 0", path)
             return 0
         size = path.stat().st_size
-    elif isinstance(path_or_bytes, (bytes | bytearray)):
+    elif isinstance(path_or_bytes, (bytes, bytearray)):
         size = len(path_or_bytes)
     else:
         raise TypeError(
@@ -204,10 +202,11 @@ def plan_for_image(
 ) -> BudgetDecision:
     """Plan a per-page image resize that keeps the extract call under budget.
 
-    The decision is the smallest ``long_side`` in
+    The decision is the **largest** ``long_side`` in
     ``[min_long_side, original_long_side]`` whose *estimated* image tokens
-    keep the call total under ``ctx_limit * safety``. If the original image
-    already fits, ``needed_long_side`` is still reported as the configured
+    still keep the call total under ``ctx_limit * safety`` (i.e. the least
+    aggressive downscale that fits). If the original image already fits,
+    ``needed_long_side`` is still reported as the configured
     ``target_long_side`` for runtime consistency.
 
     Args:
@@ -258,7 +257,7 @@ def plan_for_image(
             reason="image fits within budget at original size",
         )
 
-    # Need to downscale. Find the smallest long_side whose estimated tokens
+    # Need to downscale. Find the LARGEST long_side whose estimated tokens
     # stay under budget_for_image, via integer binary search.
     orig_w, orig_h = _open_for_size(image_path)
     orig_long_side = max(orig_w, orig_h)

@@ -156,8 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PX",
         help=(
             "Long-side cap (pixels) for inlined page images. The runner "
-            "rescales each page PNG to this size as JPEG (quality "
-            "85) before base64-encoding it. Lower values shrink the per-"
+            "rescales each page PNG to this size as JPEG at the configured "
+            "quality before base64-encoding it. Lower values shrink the per-"
             "call token cost at the expense of OCR fidelity. Overrides "
             "CONVERTPDF_IMAGE_LONG_SIDE. Default: 1536."
         ),

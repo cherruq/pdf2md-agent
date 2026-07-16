@@ -118,6 +118,8 @@ def _to_sentinel(
 
 
 _patched = False
+_active_long_side: int = _DEFAULT_TARGET_LONG_SIDE
+_active_jpeg_quality: int = _DEFAULT_JPEG_QUALITY
 
 
 def patch_add_image_tool(
@@ -127,12 +129,14 @@ def patch_add_image_tool(
 ) -> None:
     """Wrap ``AddImageTool._run`` so local paths inline and return a sentinel.
 
-    Idempotent on repeated calls: the *first* call fixes the resize/quality
-    knobs and subsequent calls are ignored. The runner relies on this — it
-    patches once at module import time and the values used for the actual
-    downscaling live in the pre-resized cache files, not in the patch.
+    Always updates the active resize/quality knobs so callers (CLI, runner)
+    can re-call this with their resolved values after module import. The
+    ``_run`` patch itself is only installed once; subsequent calls just
+    refresh the module-level state the closure reads at call time.
     """
-    global _patched
+    global _patched, _active_long_side, _active_jpeg_quality
+    _active_long_side = target_long_side
+    _active_jpeg_quality = jpeg_quality
     if _patched:
         return
     from crewai.tools.agent_tools.add_image_tool import AddImageTool
@@ -141,8 +145,8 @@ def patch_add_image_tool(
         return _to_sentinel(
             image_url,
             action,
-            target_long_side=target_long_side,
-            jpeg_quality=jpeg_quality,
+            target_long_side=_active_long_side,
+            jpeg_quality=_active_jpeg_quality,
         )
 
     AddImageTool._run = _run  # type: ignore[assignment]

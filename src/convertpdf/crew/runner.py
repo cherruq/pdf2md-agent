@@ -30,6 +30,7 @@ from convertpdf.config import (
     TOKEN_BUDGET_SAFETY,
 )
 from convertpdf.crew.agents import EXTRACTOR_PERSONA, make_extractor, make_formatter, make_summarizer
+from convertpdf.crew.multimodal_patch import patch_add_image_tool
 from convertpdf.crew.tasks import (
     TASKS_RULES_TEXT,
     _truncate_summary,
@@ -123,13 +124,7 @@ _EXTRACT_TASK_OVERHEAD = (
     "Call your add_image tool with image_url=`<page_path>` to attach the "
     "rendered page image, then transcribe its full content into raw "
     "markdown.\n\n"
-    "Verbatim rule: copy the page character-for-character — no "
-    "translation, summarization, or invented content; write `[illegible]` "
-    "for unreadable glyphs.\n\n"
-    "Language rule: write in the exact same language(s) as the source — "
-    "preserve every CJK character, Latin word, and punctuation mark; "
-    "never translate.\n\n"
-    "Output ONLY final content; no reasoning, preamble, or hidden scratchpad."
+    + TASKS_RULES_TEXT
 )
 
 
@@ -176,13 +171,18 @@ def run_pipeline(
     formatter = make_formatter(llm)
     summarizer = make_summarizer(llm) if with_summary else None
 
+    patch_add_image_tool(
+        target_long_side=image_long_side,
+        jpeg_quality=image_jpeg_quality,
+    )
+
     summary = read_summary(layout.summary_path)
     results: list[PageResult] = []
     pipeline_started = time.monotonic()
     total = len(pages)
     phases = "extract + format + summarize" if with_summary else "extract + format"
 
-    extractor_persona_text = EXTRACTOR_PERSONA + TASKS_RULES_TEXT
+    extractor_persona_text = EXTRACTOR_PERSONA
 
     for idx, page in enumerate(pages, start=1):
         artifacts = layout.artifacts_for(page)
