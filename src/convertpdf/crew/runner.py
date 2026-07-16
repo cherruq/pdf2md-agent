@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from crewai import Crew, LLM, Process
+from pydantic import ValidationError
 
 from convertpdf.cache import (
     CacheLayout,
@@ -115,6 +116,32 @@ def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_qualit
 def _resized_cache_path(layout: CacheLayout, page_number: int) -> Path:
     """Path for the downscaled JPEG copy of ``page_number``."""
     return layout.pages_dir / f"page_{page_number:04d}_resized.jpg"
+
+
+def _record_text_layer_fallback(
+    *,
+    idx: int,
+    total: int,
+    page_number: int,
+    page_started: float,
+    artifacts,
+    summary: str,
+    completion_label: str,
+) -> PageResult:
+    format_md = _text_layer_fallback(artifacts)
+    artifacts.extract_text.write_text("", encoding="utf-8")
+    artifacts.format_markdown.write_text(format_md, encoding="utf-8")
+    elapsed = time.monotonic() - page_started
+    log.info(
+        "  [%d/%d] page %d: done in %.1fs (%s, %s chars)",
+        idx,
+        total,
+        page_number,
+        elapsed,
+        completion_label,
+        f"{len(format_md):,}",
+    )
+    return PageResult(page_number, format_md, summary)
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +296,28 @@ def run_pipeline(
                 config=retry_config or RetryConfig(),
                 label=f"page {page.page_number}",
             )
+        except ValidationError as exc:
+            if not fallback_to_text:
+                raise
+            log.error(
+                "  [%d/%d] page %d: model returned malformed response "
+                "(%s, %d validation error(s)); falling back to text layer",
+                idx,
+                total,
+                page.page_number,
+                type(exc).__name__,
+                len(exc.errors()),
+            )
+            results.append(_record_text_layer_fallback(
+                idx=idx,
+                total=total,
+                page_number=page.page_number,
+                page_started=page_started,
+                artifacts=artifacts,
+                summary=summary,
+                completion_label="validation-fallback",
+            ))
+            continue
         except BaseException as exc:
             if not fallback_to_text or not is_transient(exc):
                 raise
@@ -279,20 +328,15 @@ def run_pipeline(
                 total,
                 page.page_number,
             )
-            extract_text = ""
-            format_md = _text_layer_fallback(artifacts)
-            artifacts.extract_text.write_text(extract_text, encoding="utf-8")
-            artifacts.format_markdown.write_text(format_md, encoding="utf-8")
-            elapsed = time.monotonic() - page_started
-            log.info(
-                "  [%d/%d] page %d: done in %.1fs (fallback, %s chars)",
-                idx,
-                total,
-                page.page_number,
-                elapsed,
-                f"{len(format_md):,}",
-            )
-            results.append(PageResult(page.page_number, format_md, summary))
+            results.append(_record_text_layer_fallback(
+                idx=idx,
+                total=total,
+                page_number=page.page_number,
+                page_started=page_started,
+                artifacts=artifacts,
+                summary=summary,
+                completion_label="fallback",
+            ))
             continue
 
         extract_text = _output(extract_t)
