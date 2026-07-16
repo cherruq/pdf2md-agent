@@ -218,3 +218,33 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
         "validation-fallback" in rec.message or "falling back to text layer" in rec.message
         for rec in caplog.records
     )
+
+
+def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
+    tmp_path: Path,
+) -> None:
+    page = _page(1)
+    layout = _make_layout(tmp_path, 1, "text layer content")
+
+    extract_t = _FakeTask()
+    format_t = _FakeTask()
+
+    with patch.object(runner, "make_extractor"), \
+         patch.object(runner, "make_formatter"), \
+         patch.object(runner, "make_extract_task", return_value=extract_t), \
+         patch.object(runner, "make_format_task", return_value=format_t):
+        with patch.object(runner, "Crew") as crew_cls:
+            crew_cls.return_value.kickoff = _raise_task_output_validation_error
+            with pytest.raises(ValidationError):
+                run_pipeline(
+                    pages=[page],
+                    layout=layout,
+                    with_summary=False,
+                    resume=False,
+                    text_hint=False,
+                    llm=object(),  # type: ignore[arg-type]
+                    retry_config=RetryConfig(
+                        max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+                    ),
+                    fallback_to_text=False,
+                )
