@@ -1,7 +1,6 @@
 """Tests for the token-budget planner."""
 from __future__ import annotations
 
-import io
 import math
 from pathlib import Path
 

@@ -29,9 +29,20 @@ import base64
 import io
 from pathlib import Path
 
+from PIL import Image
+
 
 _DEFAULT_TARGET_LONG_SIDE: int = 1536
 _DEFAULT_JPEG_QUALITY: int = 85
+
+# Defensive: ``UnidentifiedImageError`` is an ``OSError`` subclass, so the
+# runtime handler below already catches it. We import it explicitly so the
+# intent reads cleanly; if Pillow were ever absent at import time we fall
+# back to ``OSError`` so the except clause still binds.
+try:
+    from PIL import UnidentifiedImageError
+except ImportError:  # pragma: no cover
+    UnidentifiedImageError = OSError  # type: ignore[assignment,misc]
 
 
 def _encode_local_image(
@@ -47,8 +58,6 @@ def _encode_local_image(
     function almost never has to do real work, but it remains correct for
     arbitrary inputs in tests.
     """
-    from PIL import Image  # local import — Pillow is a hard project dep
-
     with Image.open(path) as img:
         if img.mode != "RGB":
             img = img.convert("RGB")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import tempfile
 import time
@@ -226,6 +227,38 @@ def _resolve_layout(
     )
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` via a sibling temp file + ``os.replace``.
+
+    A crash mid-write leaves the original file (if any) intact instead of
+    producing a truncated output. The temp file uses a randomized suffix and
+    lives in the same directory as ``path`` so ``os.replace`` is atomic on
+    POSIX and Windows alike.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        delete=False,
+        mode="w",
+        encoding="utf-8",
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+        try:
+            tmp.write(content)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def _build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
     """Build a RetryConfig from CLI args (override) + env (fallback). Returns None on invalid input."""
     try:
@@ -271,10 +304,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
     keep_intermediates = not args.no_intermediates
     with_summary = not args.no_summary
 
-    layout, render_target = _resolve_layout(args.pdf, args.intermediates_dir, keep_intermediates)
-
     # Resolve --pages against the PDF's actual page count so out-of-range
-    # errors surface before any rendering work happens.
+    # errors surface before we commit to creating a tempdir or doing render work.
     resolved_pages: list[int] | None
     if args.pages is None:
         resolved_pages = None
@@ -288,6 +319,55 @@ def cmd_convert(args: argparse.Namespace) -> int:
         finally:
             doc.close()
 
+    if keep_intermediates:
+        layout, render_target = _resolve_layout(args.pdf, args.intermediates_dir, True)
+        return _run_pipeline(
+            args=args,
+            layout=layout,
+            render_target=render_target,
+            resolved_pages=resolved_pages,
+            keep_intermediates=True,
+            with_summary=with_summary,
+            retry_config=retry_config,
+            fallback_to_text=fallback_to_text,
+            started=started,
+        )
+
+    with tempfile.TemporaryDirectory(prefix="convertpdf_") as td_str:
+        td = Path(td_str)
+        pages_dir = td / "pages"
+        pages_dir.mkdir()
+        layout = CacheLayout(
+            root=td,
+            pages_dir=pages_dir,
+            summary_path=td / "summary.json",
+            meta_path=td / "meta.json",
+        )
+        return _run_pipeline(
+            args=args,
+            layout=layout,
+            render_target=pages_dir,
+            resolved_pages=resolved_pages,
+            keep_intermediates=False,
+            with_summary=with_summary,
+            retry_config=retry_config,
+            fallback_to_text=fallback_to_text,
+            started=started,
+        )
+
+
+def _run_pipeline(
+    *,
+    args: argparse.Namespace,
+    layout: CacheLayout,
+    render_target: Path,
+    resolved_pages: list[int] | None,
+    keep_intermediates: bool,
+    with_summary: bool,
+    retry_config: RetryConfig,
+    fallback_to_text: bool,
+    started: float,
+) -> int:
     log.info("converting %s", args.pdf)
     log.info("  output:          %s", args.output)
     log.info("  cache:           %s", layout.root if keep_intermediates else "(tempdir, discarded)")
@@ -352,8 +432,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     )
 
     markdown = "\n\n---\n\n".join(r.markdown for r in results)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(markdown, encoding="utf-8")
+    _atomic_write_text(args.output, markdown)
     elapsed = time.monotonic() - started
     log.info(
         "wrote %s — %d page(s), %s chars in %.1fs",
