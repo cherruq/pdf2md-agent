@@ -234,6 +234,13 @@ def plan_for_image(
     del jpeg_quality  # reserved; see docstring
     if not (0.0 < safety <= 1.0):
         raise ValueError(f"safety must be in (0, 1], got {safety!r}")
+    if target_long_side < 1 or min_long_side < 1:
+        # Guards ``_est_size_at_long_side`` which takes ``(target/orig) ** 2``
+        # and would divide by zero if either side is 0.
+        raise ValueError(
+            f"target_long_side and min_long_side must be >= 1, got "
+            f"target={target_long_side}, min={min_long_side}"
+        )
     if target_long_side < min_long_side:
         raise ValueError(
             f"target_long_side={target_long_side} < min_long_side={min_long_side}"

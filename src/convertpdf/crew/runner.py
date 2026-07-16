@@ -30,7 +30,7 @@ from convertpdf.config import (
     MAX_SUMMARY_CHARS,
     TOKEN_BUDGET_SAFETY,
 )
-from convertpdf.crew.agents import EXTRACTOR_PERSONA, make_extractor, make_formatter, make_summarizer
+from convertpdf.crew.agents import EXTRACTOR_BACKSTORY, make_extractor, make_formatter, make_summarizer
 from convertpdf.crew.multimodal_patch import patch_add_image_tool
 from convertpdf.crew.tasks import (
     _truncate_summary,
@@ -198,7 +198,7 @@ def run_pipeline(
     total = len(pages)
     phases = "extract + format + summarize" if with_summary else "extract + format"
 
-    extractor_persona_text = EXTRACTOR_PERSONA
+    extractor_persona_text = EXTRACTOR_BACKSTORY
 
     for idx, page in enumerate(pages, start=1):
         artifacts = layout.artifacts_for(page)
