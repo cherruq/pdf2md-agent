@@ -104,3 +104,8 @@ def _persona_backstory(persona: str) -> str:
         _, _, backstory = persona.partition("\n\n")
         return backstory.strip()
     return persona
+
+
+EXTRACTOR_BACKSTORY: str = _persona_backstory(EXTRACTOR_PERSONA)
+FORMATTER_BACKSTORY: str = _persona_backstory(FORMATTER_PERSONA)
+SUMMARIZER_BACKSTORY: str = _persona_backstory(SUMMARIZER_PERSONA)

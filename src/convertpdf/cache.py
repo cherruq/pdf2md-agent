@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from convertpdf.pdf_renderer import PageImage
+
+
+log = logging.getLogger("convertpdf.cache")
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +92,14 @@ def write_meta(
 def read_summary(path: Path) -> str:
     if not path.exists():
         return ""
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("read_summary: %s is unreadable (%s); treating as empty", path, exc)
+        return ""
+    if not isinstance(payload, dict):
+        log.warning("read_summary: %s is not a JSON object; treating as empty", path)
+        return ""
     return str(payload.get("summary", ""))
 
 

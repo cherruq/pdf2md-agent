@@ -177,3 +177,27 @@ def test_plan_for_image_target_below_min_raises(tmp_path: Path) -> None:
             target_long_side=500,
             min_long_side=768,
         )
+
+
+def test_plan_for_image_target_zero_raises(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        plan_for_image(
+            ctx_limit=2013,
+            persona_tokens=100,
+            fixed_text_tokens=0,
+            image_path=tmp_path / "x.png",
+            target_long_side=0,
+            min_long_side=0,
+        )
+
+
+def test_plan_for_image_min_zero_raises(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        plan_for_image(
+            ctx_limit=2013,
+            persona_tokens=100,
+            fixed_text_tokens=0,
+            image_path=tmp_path / "x.png",
+            target_long_side=768,
+            min_long_side=0,
+        )

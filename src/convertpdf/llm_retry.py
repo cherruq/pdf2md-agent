@@ -105,11 +105,11 @@ def call_with_retry(
     actually waiting.
     """
     delay = config.initial_delay
-    last_exc: BaseException | None = None
+    last_exc: Exception | None = None
     for attempt in range(1, config.max_attempts + 1):
         try:
             return fn()
-        except BaseException as exc:
+        except Exception as exc:  # noqa: BLE001 — predicate is `is_transient` below
             if not is_transient(exc):
                 raise
             last_exc = exc
