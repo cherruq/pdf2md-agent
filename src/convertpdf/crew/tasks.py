@@ -1,4 +1,11 @@
-"""Per-page task factories: chain extract → format → summarize."""
+"""Per-page task factories: chain extract → format → summarize.
+
+Each task description embeds three small behavioral rules instead of long
+boilerplate — every rule is now a single sentence. A
+``MAX_SUMMARY_CHARS`` budget is enforced both when the previous summary is
+fed *in* (truncated to fit) and when the summarizer is asked to emit
+(constrained via the task prompt).
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,28 +14,55 @@ from crewai import Agent, Task
 
 from convertpdf.crew.multimodal_patch import patch_add_image_tool
 
-# Idempotent: ensures AddImageTool converts local paths to data: URLs before
-# sending them to OpenAI-compatible vision APIs (which reject bare paths).
+# Idempotent: ensures AddImageTool converts local paths to data: URLs and
+# re-encodes them as JPEG (long-side capped) before sending them to
+# OpenAI-compatible vision APIs (which reject bare paths and oversized images).
 patch_add_image_tool()
 
+# Defaults — runner may override via max_summary_chars parameter.
+MAX_SUMMARY_CHARS: int = 800
+
 _NO_REASONING = (
-    "Output ONLY the final content. Do not include any reasoning, "
-    "preamble, or <think>...</think> blocks in your response."
+    "Output ONLY final content; no reasoning, preamble, or "
+    + chr(60) + "think" + chr(62) + "..."
+    + chr(60) + "/think" + chr(62) + " blocks."
 )
 
 _LANG_RULE = (
-    "Language rule: write in the EXACT same language(s) as the source "
-    "page. Preserve every CJK character, every Latin word, every "
-    "punctuation mark. Do NOT translate, even if the page mixes "
-    "languages."
+    "Language rule: write in the exact same language(s) as the source — "
+    "preserve every CJK character, Latin word, and punctuation mark; "
+    "never translate."
 )
 
 _VERBATIM_RULE = (
-    "Verbatim rule: copy what is on the page character-for-character. "
-    "Do not paraphrase, summarize, fix typos, or insert content that "
-    "is not visible on the page. If a character is unreadable, write "
-    "`[illegible]` rather than guess."
+    "Verbatim rule: copy the page character-for-character — no "
+    "translation, summarization, or invented content; write `[illegible]` "
+    "for unreadable glyphs."
 )
+
+_SUMMARY_TRUNCATION_SUFFIX = "[…summary truncated to fit context window]"
+
+# Joined rule text consumed by the token-budget planner.
+TASKS_RULES_TEXT: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
+
+
+def _truncate_summary(text: str, max_chars: int) -> str:
+    """Return ``text`` trimmed to ``max_chars``, preserving head + tail.
+
+    The middle is dropped so the most recent running context (tail) and the
+    high-level topic (head) both survive. A sentinel suffix tells the
+    extractor agent that the visible state is incomplete.
+    """
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    budget = max(0, max_chars - len(_SUMMARY_TRUNCATION_SUFFIX) - 2)
+    head_budget = budget // 2
+    tail_budget = budget - head_budget
+    head = text[:head_budget].rstrip()
+    tail = text[-tail_budget:].lstrip() if tail_budget > 0 else ""
+    if tail:
+        return f"{head}\n{_SUMMARY_TRUNCATION_SUFFIX}\n{tail}"
+    return f"{head}\n{_SUMMARY_TRUNCATION_SUFFIX}"
 
 
 def _text_hint_block(text: str) -> str:
@@ -53,11 +87,14 @@ def make_extract_task(
     page_path: Path,
     text_hint: str = "",
     previous_summary: str = "",
+    *,
+    max_summary_chars: int = MAX_SUMMARY_CHARS,
 ) -> Task:
     """Create the page-extraction task with image + text hint + cross-page context."""
+    safe_summary = _truncate_summary(previous_summary, max_summary_chars)
     summary_block = (
-        f"Running summary of preceding pages:\n{previous_summary}\n\n"
-        if previous_summary.strip()
+        f"Running summary of preceding pages:\n{safe_summary}\n\n"
+        if safe_summary.strip()
         else ""
     )
     description = (
@@ -97,6 +134,8 @@ def make_summarize_task(
     summarizer: Agent,
     format_task: Task,
     previous_summary: str,
+    *,
+    max_chars: int = MAX_SUMMARY_CHARS,
 ) -> Task:
     """Create the summary-update task; sees current page + previous summary."""
     previous_block = (
@@ -107,13 +146,19 @@ def make_summarize_task(
     return Task(
         description=(
             f"{previous_block}"
-            "Update the running summary to incorporate the current "
-            "page. Keep it under ~200 words; preserve named entities, "
-            "running arguments, and unresolved threads.\n\n"
+            f"Update the running summary to incorporate the current page. "
+            f"Keep the output under {max_chars} characters — preserve named "
+            f"entities, running arguments, and unresolved threads; "
+            f"drop settled details. If the previous summary was truncated "
+            f"to fit the context window, prioritize newly visible content "
+            f"when absorbing this page.\n\n"
             f"{_LANG_RULE}\n\n"
             f"{_NO_REASONING}"
         ),
-        expected_output="Updated running summary, ~200 words, language matches source",
+        expected_output=(
+            f"Updated running summary, ≤ {max_chars} characters, "
+            "language matches source"
+        ),
         agent=summarizer,
         context=[format_task],
     )
