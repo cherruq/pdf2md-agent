@@ -1,10 +1,17 @@
-"""Per-page CrewAI runner: maintains running summary state, writes cache."""
+"""Per-page CrewAI runner: maintains running summary state, writes cache.
+
+Budgets every extract call against :func:`plan_for_image`: when a raw page
+PNG would blow the model context window (e.g. a 184 KB 144 DPI PNG
+encoding to ~71 k base64 tokens), the page is downscaled to a JPEG copy
+under ``layout.pages_dir`` before the agent ever sees it.
+"""
 from __future__ import annotations
 
 import logging
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from crewai import Crew, LLM, Process
 
@@ -14,26 +21,45 @@ from convertpdf.cache import (
     read_summary,
     write_summary,
 )
-from convertpdf.crew.agents import (
-    make_extractor,
-    make_formatter,
-    make_summarizer,
+from convertpdf.config import (
+    CTX_LIMIT,
+    IMAGE_JPEG_QUALITY,
+    IMAGE_LONG_SIDE,
+    IMAGE_MIN_LONG_SIDE,
+    MAX_SUMMARY_CHARS,
+    TOKEN_BUDGET_SAFETY,
 )
+from convertpdf.crew.agents import EXTRACTOR_PERSONA, make_extractor, make_formatter, make_summarizer
+from convertpdf.crew.multimodal_patch import patch_add_image_tool
 from convertpdf.crew.tasks import (
+    _truncate_summary,
+    build_extract_description,
     make_extract_task,
     make_format_task,
     make_summarize_task,
 )
 from convertpdf.llm_retry import RetryConfig, call_with_retry, is_transient
 from convertpdf.pdf_renderer import PageImage
+from convertpdf.token_budget import (
+    estimate_image_tokens,
+    estimate_text_tokens,
+    plan_for_image,
+)
 
 log = logging.getLogger("convertpdf.runner")
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_THINK_OPEN = chr(60) + "think" + chr(62)
+_THINK_CLOSE = chr(60) + "/think" + chr(62)
+_THINK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
 
 
 def _strip_think(text: str) -> str:
-    """Remove ``<think>...</think>`` reasoning blocks from model output."""
+    """Remove inline model reasoning blocks from output.
+
+    Some models wrap their scratchpad in reasoning tags; the configured
+    MiniMax-M3 endpoint sometimes leaves them in the response. Strip them
+    defensively before downstream consumers see them.
+    """
     return _THINK_RE.sub("", text).strip()
 
 
@@ -69,6 +95,28 @@ def _text_layer_fallback(artifacts) -> str:
     )
 
 
+def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_quality: int) -> None:
+    """Render ``src`` to ``dst`` as a downscaled JPEG.
+
+    Uses the same LANCZOS resampler as
+    :func:`convertpdf.crew.multimodal_patch._encode_local_image` so the
+    pre-resized cache file looks identical to what the in-memory patch
+    would produce inline.
+    """
+    from PIL import Image
+
+    with Image.open(src) as img:
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        img.thumbnail((target_long_side, target_long_side), Image.LANCZOS)
+        img.save(dst, "JPEG", quality=jpeg_quality, optimize=True)
+
+
+def _resized_cache_path(layout: CacheLayout, page_number: int) -> Path:
+    """Path for the downscaled JPEG copy of ``page_number``."""
+    return layout.pages_dir / f"page_{page_number:04d}_resized.jpg"
+
+
 @dataclass(frozen=True, slots=True)
 class PageResult:
     """One page's final markdown + the running summary after this page."""
@@ -88,6 +136,12 @@ def run_pipeline(
     llm: LLM,
     retry_config: RetryConfig | None = None,
     fallback_to_text: bool = True,
+    ctx_limit: int = CTX_LIMIT,
+    image_long_side: int = IMAGE_LONG_SIDE,
+    image_min_long_side: int = IMAGE_MIN_LONG_SIDE,
+    image_jpeg_quality: int = IMAGE_JPEG_QUALITY,
+    max_summary_chars: int = MAX_SUMMARY_CHARS,
+    token_budget_safety: float = TOKEN_BUDGET_SAFETY,
 ) -> list[PageResult]:
     """Run the per-page CrewAI pipeline across ``pages`` and return page results.
 
@@ -98,16 +152,26 @@ def run_pipeline(
     ``crew.kickoff()`` call. On exhaustion, if ``fallback_to_text`` is True,
     the page is rendered as a fenced text-layer markdown stub so the rest of
     the pipeline keeps moving; otherwise the exception propagates.
+
+    The remaining keyword arguments are the token-budget knobs (see
+    :mod:`convertpdf.config`). All have sensible defaults.
     """
     extractor = make_extractor(llm)
     formatter = make_formatter(llm)
     summarizer = make_summarizer(llm) if with_summary else None
+
+    patch_add_image_tool(
+        target_long_side=image_long_side,
+        jpeg_quality=image_jpeg_quality,
+    )
 
     summary = read_summary(layout.summary_path)
     results: list[PageResult] = []
     pipeline_started = time.monotonic()
     total = len(pages)
     phases = "extract + format + summarize" if with_summary else "extract + format"
+
+    extractor_persona_text = EXTRACTOR_PERSONA
 
     for idx, page in enumerate(pages, start=1):
         artifacts = layout.artifacts_for(page)
@@ -124,24 +188,77 @@ def run_pipeline(
             artifacts.page_text.read_text(encoding="utf-8") if text_hint else ""
         )
 
+        persona_tokens = estimate_text_tokens(extractor_persona_text)
+        description_for_budget = build_extract_description(
+            page.image_path, text_hint_str, summary,
+            max_summary_chars=max_summary_chars,
+        )
+        fixed_text_tokens = estimate_text_tokens(description_for_budget)
+        decision = plan_for_image(
+            ctx_limit=ctx_limit,
+            persona_tokens=persona_tokens,
+            fixed_text_tokens=fixed_text_tokens,
+            image_path=page.image_path,
+            target_long_side=image_long_side,
+            min_long_side=image_min_long_side,
+            jpeg_quality=image_jpeg_quality,
+            safety=token_budget_safety,
+        )
+        current_img_tokens = estimate_image_tokens(page.image_path)
+        log.info(
+            "  [%d/%d] page %d: tokens est. total=%d (text=%d, img=%d), "
+            "target_long_side=%d, reason=%s",
+            idx,
+            total,
+            page.page_number,
+            decision.total,
+            persona_tokens + fixed_text_tokens,
+            current_img_tokens,
+            decision.needed_long_side,
+            decision.reason,
+        )
+
+        attach_image_path: Path = page.image_path
+        resized_path = _resized_cache_path(layout, page.page_number)
+        needs_resize = (
+            not decision.fits
+            or decision.needed_long_side < image_long_side
+        )
+        if needs_resize:
+            if not resized_path.is_file():
+                layout.pages_dir.mkdir(parents=True, exist_ok=True)
+                _resize_page_png(
+                    page.image_path,
+                    resized_path,
+                    target_long_side=decision.needed_long_side,
+                    jpeg_quality=image_jpeg_quality,
+                )
+            attach_image_path = resized_path
+
         log.info("  [%d/%d] page %d: %s starting", idx, total, page.page_number, phases)
         page_started = time.monotonic()
 
         extract_t = make_extract_task(
-            extractor, page.image_path, text_hint=text_hint_str, previous_summary=summary
+            extractor,
+            attach_image_path,
+            text_hint=text_hint_str,
+            previous_summary=summary,
+            max_summary_chars=max_summary_chars,
         )
         format_t = make_format_task(formatter, extract_t)
         tasks = [extract_t, format_t]
-        agents = [extractor, formatter]
+        agents_list = [extractor, formatter]
         if summarizer is not None:
-            summarize_t = make_summarize_task(summarizer, format_t, summary)
+            summarize_t = make_summarize_task(
+                summarizer, format_t, summary, max_chars=max_summary_chars
+            )
             tasks.append(summarize_t)
-            agents.append(summarizer)
+            agents_list.append(summarizer)
         else:
             summarize_t = None
 
         crew = Crew(
-            agents=agents,
+            agents=agents_list,
             tasks=tasks,
             process=Process.sequential,
             verbose=False,
@@ -166,8 +283,6 @@ def run_pipeline(
             format_md = _text_layer_fallback(artifacts)
             artifacts.extract_text.write_text(extract_text, encoding="utf-8")
             artifacts.format_markdown.write_text(format_md, encoding="utf-8")
-            # Skip the summarizer for this page: the upstream markdown is a
-            # stub, so feeding it forward would corrupt the running summary.
             elapsed = time.monotonic() - page_started
             log.info(
                 "  [%d/%d] page %d: done in %.1fs (fallback, %s chars)",
@@ -187,6 +302,8 @@ def run_pipeline(
 
         if summarize_t is not None:
             summary = _output(summarize_t)
+            if len(summary) > max_summary_chars:
+                summary = _truncate_summary(summary, max_summary_chars)
             write_summary(layout.summary_path, summary)
 
         elapsed = time.monotonic() - page_started

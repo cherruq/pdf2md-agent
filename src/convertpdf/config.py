@@ -50,6 +50,18 @@ OPENAI_BASE_URL: Final[str] = _env("OPENAI_BASE_URL", "https://api.minimaxi.com/
 MODEL_NAME: Final[str] = _env("CONVERTPDF_MODEL", "MiniMax-M3")
 
 
+# --- Token-budget / image-downscale knobs -----------------------------------
+# MiniMax-M3 rejects payloads over ~2013 tokens; the 0.85 safety margin
+# keeps us off the cliff edge while a paginate is in flight.
+
+CTX_LIMIT: Final[int] = _env_int("CONVERTPDF_CTX_LIMIT", 2013)
+TOKEN_BUDGET_SAFETY: Final[float] = _env_float("CONVERTPDF_TOKEN_BUDGET_SAFETY", 0.85)
+IMAGE_LONG_SIDE: Final[int] = _env_int("CONVERTPDF_IMAGE_LONG_SIDE", 1536)
+IMAGE_JPEG_QUALITY: Final[int] = _env_int("CONVERTPDF_IMAGE_JPEG_QUALITY", 85)
+IMAGE_MIN_LONG_SIDE: Final[int] = _env_int("CONVERTPDF_IMAGE_MIN_LONG_SIDE", 768)
+MAX_SUMMARY_CHARS: Final[int] = _env_int("CONVERTPDF_MAX_SUMMARY_CHARS", 800)
+
+
 # --- LLM retry / fallback knobs ---------------------------------------------
 # Defaults: 4 total attempts (1 initial + 3 retries) over ~7s of total wait
 # before giving up on a page and falling back to text-layer markdown.

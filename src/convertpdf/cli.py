@@ -12,12 +12,18 @@ from pathlib import Path
 
 from convertpdf.cache import CacheLayout, write_meta
 from convertpdf.config import (
+    CTX_LIMIT,
     FALLBACK_TO_TEXT,
+    IMAGE_JPEG_QUALITY,
+    IMAGE_LONG_SIDE,
+    IMAGE_MIN_LONG_SIDE,
+    MAX_SUMMARY_CHARS,
     RETRY_BACKOFF,
     RETRY_INITIAL_DELAY,
     RETRY_JITTER,
     RETRY_MAX_ATTEMPTS,
     RETRY_MAX_DELAY,
+    TOKEN_BUDGET_SAFETY,
 )
 from convertpdf.crew.runner import run_pipeline
 from convertpdf.llm_retry import RetryConfig
@@ -141,6 +147,52 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "On retry exhaustion, raise instead of falling back to the PDF's "
             "native text layer. Default: fallback enabled."
+        ),
+    )
+    cv.add_argument(
+        "--image-long-side",
+        type=int,
+        default=None,
+        metavar="PX",
+        help=(
+            "Long-side cap (pixels) for inlined page images. The runner "
+            "rescales each page PNG to this size as JPEG at the configured "
+            "quality before base64-encoding it. Lower values shrink the per-"
+            "call token cost at the expense of OCR fidelity. Overrides "
+            "CONVERTPDF_IMAGE_LONG_SIDE. Default: 1536."
+        ),
+    )
+    cv.add_argument(
+        "--image-quality",
+        type=int,
+        default=None,
+        metavar="Q",
+        help=(
+            "JPEG quality (1-95) used when the runner downsamples page "
+            "images. Higher values preserve detail but enlarge the per-"
+            "call token cost. Overrides CONVERTPDF_IMAGE_JPEG_QUALITY. "
+            "Default: 85."
+        ),
+    )
+    cv.add_argument(
+        "--max-summary-chars",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum running-summary size (characters) fed into the next "
+            "page's extract call and produced by the summarizer. Overrides "
+            "CONVERTPDF_MAX_SUMMARY_CHARS. Default: 800."
+        ),
+    )
+    cv.add_argument(
+        "--ctx-limit",
+        type=int,
+        default=None,
+        metavar="TOK",
+        help=(
+            "Model context-window token limit the runner budgets against. "
+            "Used only when CONVERTPDF_CTX_LIMIT is wrong. Default: 2013."
         ),
     )
     return parser
@@ -269,6 +321,19 @@ def cmd_convert(args: argparse.Namespace) -> int:
         retry_config.jitter * 100,
     )
     log.info("  fallback:        %s", "text layer" if fallback_to_text else "off")
+    image_long_side = args.image_long_side if args.image_long_side is not None else IMAGE_LONG_SIDE
+    image_jpeg_quality = args.image_quality if args.image_quality is not None else IMAGE_JPEG_QUALITY
+    max_summary_chars = args.max_summary_chars if args.max_summary_chars is not None else MAX_SUMMARY_CHARS
+    ctx_limit = args.ctx_limit if args.ctx_limit is not None else CTX_LIMIT
+    log.info(
+        "  budget:          ctx_limit=%d, safety=%.0f%%, image_long_side=%dpx, "
+        "image_q=%d, max_summary=%d chars",
+        ctx_limit,
+        TOKEN_BUDGET_SAFETY * 100,
+        image_long_side,
+        image_jpeg_quality,
+        max_summary_chars,
+    )
     results = run_pipeline(
         pages=pages,
         layout=layout,
@@ -278,6 +343,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
         llm=llm,
         retry_config=retry_config,
         fallback_to_text=fallback_to_text,
+        ctx_limit=ctx_limit,
+        image_long_side=image_long_side,
+        image_min_long_side=IMAGE_MIN_LONG_SIDE,
+        image_jpeg_quality=image_jpeg_quality,
+        max_summary_chars=max_summary_chars,
+        token_budget_safety=TOKEN_BUDGET_SAFETY,
     )
 
     markdown = "\n\n---\n\n".join(r.markdown for r in results)
