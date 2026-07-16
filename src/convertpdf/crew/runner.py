@@ -32,6 +32,7 @@ from convertpdf.config import (
 from convertpdf.crew.agents import EXTRACTOR_PERSONA, make_extractor, make_formatter, make_summarizer
 from convertpdf.crew.multimodal_patch import patch_add_image_tool
 from convertpdf.crew.tasks import (
+    EXTRACT_TASK_INTRO,
     TASKS_RULES_TEXT,
     _truncate_summary,
     make_extract_task,
@@ -117,17 +118,6 @@ def _resized_cache_path(layout: CacheLayout, page_number: int) -> Path:
     return layout.pages_dir / f"page_{page_number:04d}_resized.jpg"
 
 
-# Prompt scaffold the extract task description adds on top of the variable
-# parts (summary block + text-hint). Mirrors what ``make_extract_task``
-# emits so the budget planner counts the right overhead.
-_EXTRACT_TASK_OVERHEAD = (
-    "Call your add_image tool with image_url=`<page_path>` to attach the "
-    "rendered page image, then transcribe its full content into raw "
-    "markdown.\n\n"
-    + TASKS_RULES_TEXT
-)
-
-
 @dataclass(frozen=True, slots=True)
 class PageResult:
     """One page's final markdown + the running summary after this page."""
@@ -202,7 +192,7 @@ def run_pipeline(
         persona_tokens = estimate_text_tokens(extractor_persona_text)
         safe_summary_for_budget = _truncate_summary(summary, max_summary_chars)
         fixed_text_tokens = estimate_text_tokens(
-            safe_summary_for_budget + text_hint_str + _EXTRACT_TASK_OVERHEAD
+            safe_summary_for_budget + text_hint_str + EXTRACT_TASK_INTRO + TASKS_RULES_TEXT
         )
         decision = plan_for_image(
             ctx_limit=ctx_limit,

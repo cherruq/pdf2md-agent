@@ -45,6 +45,12 @@ _SUMMARY_TRUNCATION_SUFFIX = "[…summary truncated to fit context window]"
 # Joined rule text consumed by the token-budget planner.
 TASKS_RULES_TEXT: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
 
+EXTRACT_TASK_INTRO: str = (
+    "Call your add_image tool with image_url=`<page_path>` to attach "
+    "the rendered page image, then transcribe its full content "
+    "into raw markdown.\n\n"
+)
+
 
 def _truncate_summary(text: str, max_chars: int) -> str:
     """Return ``text`` trimmed to ``max_chars``, preserving head + tail.
@@ -100,12 +106,8 @@ def make_extract_task(
     description = (
         f"{summary_block}"
         f"{_text_hint_block(text_hint)}"
-        f"Call your add_image tool with image_url=`{page_path}` to attach "
-        f"the rendered page image, then transcribe its full content "
-        f"into raw markdown.\n\n"
-        f"{_VERBATIM_RULE}\n\n"
-        f"{_LANG_RULE}\n\n"
-        f"{_NO_REASONING}"
+        f"{EXTRACT_TASK_INTRO}"
+        f"{TASKS_RULES_TEXT}"
     )
     return Task(
         description=description,
