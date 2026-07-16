@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from crewai import Crew, LLM, Process
+from pydantic import ValidationError
 
 from convertpdf.cache import (
     CacheLayout,
@@ -269,6 +270,32 @@ def run_pipeline(
                 config=retry_config or RetryConfig(),
                 label=f"page {page.page_number}",
             )
+        except ValidationError as exc:
+            if not fallback_to_text:
+                raise
+            log.error(
+                "  [%d/%d] page %d: model returned malformed response (%s); "
+                "falling back to text layer",
+                idx,
+                total,
+                page.page_number,
+                type(exc).__name__,
+            )
+            extract_text = ""
+            format_md = _text_layer_fallback(artifacts)
+            artifacts.extract_text.write_text(extract_text, encoding="utf-8")
+            artifacts.format_markdown.write_text(format_md, encoding="utf-8")
+            elapsed = time.monotonic() - page_started
+            log.info(
+                "  [%d/%d] page %d: done in %.1fs (validation-fallback, %s chars)",
+                idx,
+                total,
+                page.page_number,
+                elapsed,
+                f"{len(format_md):,}",
+            )
+            results.append(PageResult(page.page_number, format_md, summary))
+            continue
         except BaseException as exc:
             if not fallback_to_text or not is_transient(exc):
                 raise
