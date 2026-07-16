@@ -84,7 +84,7 @@ def _to_data_url(
             target_long_side=target_long_side,
             jpeg_quality=jpeg_quality,
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError, UnidentifiedImageError):
         return value
     b64 = base64.b64encode(encoded).decode("ascii")
     return f"data:image/jpeg;base64,{b64}"

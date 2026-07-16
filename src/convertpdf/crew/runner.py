@@ -32,9 +32,8 @@ from convertpdf.config import (
 from convertpdf.crew.agents import EXTRACTOR_PERSONA, make_extractor, make_formatter, make_summarizer
 from convertpdf.crew.multimodal_patch import patch_add_image_tool
 from convertpdf.crew.tasks import (
-    EXTRACT_TASK_INTRO,
-    TASKS_RULES_TEXT,
     _truncate_summary,
+    build_extract_description,
     make_extract_task,
     make_format_task,
     make_summarize_task,
@@ -190,10 +189,11 @@ def run_pipeline(
         )
 
         persona_tokens = estimate_text_tokens(extractor_persona_text)
-        safe_summary_for_budget = _truncate_summary(summary, max_summary_chars)
-        fixed_text_tokens = estimate_text_tokens(
-            safe_summary_for_budget + text_hint_str + EXTRACT_TASK_INTRO + TASKS_RULES_TEXT
+        description_for_budget = build_extract_description(
+            page.image_path, text_hint_str, summary,
+            max_summary_chars=max_summary_chars,
         )
+        fixed_text_tokens = estimate_text_tokens(description_for_budget)
         decision = plan_for_image(
             ctx_limit=ctx_limit,
             persona_tokens=persona_tokens,

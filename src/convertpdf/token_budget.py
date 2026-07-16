@@ -37,7 +37,7 @@ _CJK_CHARS_PER_TOKEN: Final[float] = 3.0
 # inflate this a bit but the heuristic is intentionally coarse.
 _ASCII_CHARS_PER_TOKEN: Final[float] = 4.0
 
-PathOrBytes = Union[str, Path, bytes]
+PathOrBytes = Union[str, Path, bytes, bytearray]
 
 
 def estimate_text_tokens(s: str) -> int:
@@ -263,14 +263,12 @@ def plan_for_image(
     orig_long_side = max(orig_w, orig_h)
 
     if orig_long_side <= min_long_side:
-        # Image is already smaller than the OCR legibility floor; nothing we
-        # can do besides report that it doesn't fit.
         total = persona_tokens + fixed_text_tokens + current_tokens
         return BudgetDecision(
             total=total,
             limit=limit,
             fits=False,
-            needed_long_side=target_long_side,
+            needed_long_side=orig_long_side,
             reason=(
                 f"image already smaller than min_long_side={min_long_side}; "
                 "fixed-text budget is too tight"
