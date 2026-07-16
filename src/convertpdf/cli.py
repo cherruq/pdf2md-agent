@@ -40,12 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="convertpdf",
         description="Convert a PDF to markdown via a CrewAI vision pipeline (MiniMax-M3).",
     )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
-
-    cv = sub.add_parser("convert", help="Render a PDF to markdown.")
-    cv.add_argument("pdf", type=Path, help="Input PDF path.")
-    cv.add_argument("-o", "--output", type=Path, required=True, help="Output markdown path.")
-    cv.add_argument(
+    parser.add_argument("pdf", type=Path, help="Input PDF path.")
+    parser.add_argument("-o", "--output", type=Path, required=True, help="Output markdown path.")
+    parser.add_argument(
         "--dpi",
         type=int,
         default=144,
@@ -57,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
             "300+ (print, usually overkill for vision models)."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "-p", "--pages",
         type=parse_page_spec,
         default=None,
@@ -69,33 +66,33 @@ def build_parser() -> argparse.ArgumentParser:
             "Default: all pages."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--no-intermediates",
         action="store_true",
         help="Skip writing intermediate cache files.",
     )
-    cv.add_argument(
+    parser.add_argument(
         "--intermediates-dir",
         type=Path,
         default=None,
         help="Override the intermediates cache directory (default: .convertpdf-cache/<pdf_stem>/).",
     )
-    cv.add_argument(
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Reuse cached per-page outputs when present; only re-run missing pages.",
     )
-    cv.add_argument(
+    parser.add_argument(
         "--no-summary",
         action="store_true",
         help="Disable cross-page running summary (process each page independently).",
     )
-    cv.add_argument(
+    parser.add_argument(
         "--no-text-hint",
         action="store_true",
         help="Disable feeding the PDF's native text layer to the extractor.",
     )
-    cv.add_argument(
+    parser.add_argument(
         "--max-retries",
         type=int,
         default=None,
@@ -104,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
             "CONVERTPDF_MAX_RETRIES. Default: 4."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--retry-initial-delay",
         type=float,
         default=None,
@@ -113,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
             "CONVERTPDF_RETRY_INITIAL_DELAY. Default: 1.0."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--retry-backoff",
         type=float,
         default=None,
@@ -122,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
             "CONVERTPDF_RETRY_BACKOFF. Default: 2.0."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--retry-max-delay",
         type=float,
         default=None,
@@ -131,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
             "CONVERTPDF_RETRY_MAX_DELAY. Default: 30.0."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--retry-jitter",
         type=float,
         default=None,
@@ -140,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
             "thundering-herd. Overrides CONVERTPDF_RETRY_JITTER. Default: 0.25."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--no-fallback-to-text",
         action="store_false",
         dest="fallback_to_text",
@@ -150,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
             "native text layer. Default: fallback enabled."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--image-long-side",
         type=int,
         default=None,
@@ -163,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
             "CONVERTPDF_IMAGE_LONG_SIDE. Default: 1536."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--image-quality",
         type=int,
         default=None,
@@ -175,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Default: 85."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--max-summary-chars",
         type=int,
         default=None,
@@ -186,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
             "CONVERTPDF_MAX_SUMMARY_CHARS. Default: 800."
         ),
     )
-    cv.add_argument(
+    parser.add_argument(
         "--ctx-limit",
         type=int,
         default=None,
@@ -452,11 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
     )
     args = build_parser().parse_args(argv)
-    match args.command:
-        case "convert":
-            return cmd_convert(args)
-        case _:
-            raise AssertionError(f"unreachable command: {args.command!r}")  # subparser is required
+    return cmd_convert(args)
 
 
 if __name__ == "__main__":

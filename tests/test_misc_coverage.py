@@ -142,7 +142,7 @@ def test_strip_think_strips_whitespace() -> None:
 
 def test_cli_parse_known_args() -> None:
     parser = cli.build_parser()
-    args = parser.parse_args(["convert", "in.pdf", "-o", "out.md"])
+    args = parser.parse_args(["in.pdf", "-o", "out.md"])
     assert args.pdf == Path("in.pdf")
     assert args.output == Path("out.md")
     assert args.dpi == 144
@@ -155,18 +155,18 @@ def test_cli_parse_known_args() -> None:
 
 def test_cli_parse_pages_spec() -> None:
     parser = cli.build_parser()
-    args = parser.parse_args(["convert", "in.pdf", "-o", "x.md", "-p", "1-5,8"])
+    args = parser.parse_args(["in.pdf", "-o", "x.md", "-p", "1-5,8"])
     assert args.pages == [1, 2, 3, 4, 5, 8]
 
 
 def test_cli_parse_rejects_invalid_pages() -> None:
     parser = cli.build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["convert", "in.pdf", "-o", "x.md", "-p", "0"])
+        parser.parse_args(["in.pdf", "-o", "x.md", "-p", "0"])
 
 
 def test_cli_main_missing_pdf_returns_1(capsys) -> None:
-    rc = cli.main(["convert", "/no/such/file.pdf", "-o", "/tmp/out.md"])
+    rc = cli.main(["/no/such/file.pdf", "-o", "/tmp/out.md"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "input PDF not found" in err
