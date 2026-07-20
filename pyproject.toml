@@ -1,0 +1,30 @@
+[project]
+name = "convertpdf"
+version = "0.2.0"
+description = "Convert PDF documents to language-preserving Markdown by rendering each page to an image and feeding it through a CrewAI pipeline of vision agents. Defaults to the MiniMax-M3 OpenAI-compatible endpoint; any vision LLM behind an OpenAI-style API works via OPENAI_BASE_URL."
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf>=1.24,<2",
+    "crewai>=0.80,<2",
+    "openai>=1.0,<2",
+    "python-dotenv>=1.0",
+    "Pillow>=10.0",  # image downscale / resize in multimodal_patch, runner, token_budget
+]
+
+[project.scripts]
+convertpdf = "convertpdf.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/convertpdf"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = ["-ra"]
