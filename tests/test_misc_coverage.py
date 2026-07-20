@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from convertpdf import cli
-from convertpdf.cache import (
+from pdf2md_agent import cli
+from pdf2md_agent.cache import (
     CacheLayout,
     is_page_complete,
     read_summary,
     write_summary,
 )
-from convertpdf.crew.runner import _strip_think
-from convertpdf.pdf_renderer import PageImage, read_page_text, render_pdf
+from pdf2md_agent.crew.runner import _strip_think
+from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
 
 
 # --- CacheLayout ----------------------------------------------------------
@@ -77,7 +77,7 @@ def test_read_write_summary_round_trip(tmp_path: Path) -> None:
 def test_read_summary_corrupt_returns_empty(tmp_path: Path, caplog) -> None:
     path = tmp_path / "summary.json"
     path.write_text("{not json", encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="convertpdf.cache"):
+    with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
         assert read_summary(path) == ""
     assert any("unreadable" in rec.message for rec in caplog.records)
 
@@ -85,7 +85,7 @@ def test_read_summary_corrupt_returns_empty(tmp_path: Path, caplog) -> None:
 def test_read_summary_wrong_shape_returns_empty(tmp_path: Path, caplog) -> None:
     path = tmp_path / "summary.json"
     path.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="convertpdf.cache"):
+    with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
         assert read_summary(path) == ""
     assert any("not a JSON object" in rec.message for rec in caplog.records)
 

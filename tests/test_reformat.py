@@ -13,19 +13,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from convertpdf.crew.agents import (
+from pdf2md_agent.crew.agents import (
     FORMATTER_PERSONA_STRICT,
     FORMATTER_PERSONA_REFORMAT,
     make_formatter,
 )
-from convertpdf.cache import CacheLayout, has_cached_extract
-from convertpdf.cli import build_parser
-from convertpdf.crew.runner import _run_format_summarize_only, run_pipeline
-from convertpdf.crew.tasks import (
+from pdf2md_agent.cache import CacheLayout, has_cached_extract
+from pdf2md_agent.cli import build_parser
+from pdf2md_agent.crew.runner import _run_format_summarize_only, run_pipeline
+from pdf2md_agent.crew.tasks import (
     make_format_task,
     make_format_task_from_extract_file,
 )
-from convertpdf.llm_retry import RetryConfig
+from pdf2md_agent.llm_retry import RetryConfig
 from openai import APITimeoutError
 from pydantic import BaseModel, ValidationError
 
@@ -50,7 +50,7 @@ def test_formatter_persona_reformat_drops_layout_artifacts():
 
 
 def test_make_formatter_reformat_uses_layout_aware_role():
-    with patch("convertpdf.crew.agents.Agent") as MockAgent:
+    with patch("pdf2md_agent.crew.agents.Agent") as MockAgent:
         make_formatter(MagicMock(), reformat=True)
     # role carries "Layout-Aware"; backstory is the extracted \n\n text
     assert MockAgent.call_args.kwargs["role"] == "Markdown Formatter (Layout-Aware)"
@@ -61,12 +61,12 @@ def test_make_formatter_reformat_uses_layout_aware_role():
 
 def test_make_formatter_default_unchanged():
     """reformat=False default must match today's agent exactly."""
-    with patch("convertpdf.crew.agents.Agent") as MockAgent:
+    with patch("pdf2md_agent.crew.agents.Agent") as MockAgent:
         make_formatter(MagicMock())
     assert MockAgent.call_args.kwargs["role"] == "Markdown Formatter"
     assert "Layout-Aware" not in MockAgent.call_args.kwargs["backstory"]
 
-    with patch("convertpdf.crew.agents.Agent") as MockAgent:
+    with patch("pdf2md_agent.crew.agents.Agent") as MockAgent:
         make_formatter(MagicMock(), reformat=False)
     assert MockAgent.call_args.kwargs["role"] == "Markdown Formatter"
     assert "Layout-Aware" not in MockAgent.call_args.kwargs["backstory"]
@@ -75,7 +75,7 @@ def test_make_formatter_default_unchanged():
 def test_make_format_task_reformat_appends_strip_instruction():
     """make_format_task(reformat=True) must append strip-headers/footers/numbers."""
     extract_t = MagicMock()
-    with patch("convertpdf.crew.tasks.Task") as MockTask:
+    with patch("pdf2md_agent.crew.tasks.Task") as MockTask:
         MockTask.return_value = MagicMock(description="", context=[])
         make_format_task(MagicMock(), extract_t, reformat=True)
         desc = MockTask.call_args.kwargs["description"]
@@ -86,7 +86,7 @@ def test_make_format_task_reformat_appends_strip_instruction():
 def test_make_format_task_default_description_unchanged():
     """Default (reformat=False) description must match today's byte-for-byte."""
     extract_t = MagicMock()
-    with patch("convertpdf.crew.tasks.Task") as MockTask:
+    with patch("pdf2md_agent.crew.tasks.Task") as MockTask:
         MockTask.return_value = MagicMock(description="", context=[])
         make_format_task(MagicMock(), extract_t)
         desc = MockTask.call_args.kwargs["description"]
@@ -97,7 +97,7 @@ def test_make_format_task_default_description_unchanged():
 def test_make_format_task_from_extract_file_inlines_text(tmp_path: Path):
     extract_path = tmp_path / "page_0001_extract.txt"
     extract_path.write_text("# Heading\n\nPage 7 of 100\n\nBody.\n", encoding="utf-8")
-    with patch("convertpdf.crew.tasks.Task") as MockTask:
+    with patch("pdf2md_agent.crew.tasks.Task") as MockTask:
         MockTask.return_value = MagicMock(description="", context=[])
         make_format_task_from_extract_file(MagicMock(), extract_path)
         desc = MockTask.call_args.kwargs["description"]
@@ -145,7 +145,7 @@ def _write_text(path: Path, text: str) -> None:
 
 
 def _make_artifacts(tmp_path: Path, page_number: int = 1):
-    from convertpdf.cache import CacheLayout
+    from pdf2md_agent.cache import CacheLayout
     root = tmp_path / "cache"
     layout = CacheLayout.for_pdf(root, tmp_path / "fake.pdf")
     artifacts = layout.artifacts_for(
@@ -170,13 +170,13 @@ def test_run_format_summarize_only_writes_format_md_from_extract(
     llm = MagicMock()
     retry = RetryConfig(max_attempts=1, initial_delay=0.0, backoff=1.0, max_delay=0.0, jitter=0.0)
 
-    with patch("convertpdf.crew.runner.make_formatter") as mk_fmt, \
-         patch("convertpdf.crew.runner.make_summarizer") as mk_sum, \
-         patch("convertpdf.crew.runner.make_format_task_from_extract_file") as mk_fmt_task, \
-         patch("convertpdf.crew.runner.make_summarize_task") as mk_sum_task, \
-         patch("convertpdf.crew.runner.make_extractor") as mk_extractor, \
-         patch("convertpdf.crew.runner.Crew") as crew_cls, \
-         patch("convertpdf.crew.runner._output") as output_fn:
+    with patch("pdf2md_agent.crew.runner.make_formatter") as mk_fmt, \
+         patch("pdf2md_agent.crew.runner.make_summarizer") as mk_sum, \
+         patch("pdf2md_agent.crew.runner.make_format_task_from_extract_file") as mk_fmt_task, \
+         patch("pdf2md_agent.crew.runner.make_summarize_task") as mk_sum_task, \
+         patch("pdf2md_agent.crew.runner.make_extractor") as mk_extractor, \
+         patch("pdf2md_agent.crew.runner.Crew") as crew_cls, \
+         patch("pdf2md_agent.crew.runner._output") as output_fn:
         formatter = MagicMock()
         summarizer = MagicMock()
         mk_fmt.return_value = formatter
@@ -226,7 +226,7 @@ def test_run_pipeline_reformat_skips_extractor_and_rewrites_format(
 ):
     """With reformat=True and a cached extract.txt, run_pipeline must NOT
     call the extractor and must overwrite format.md."""
-    from convertpdf.cache import CacheLayout, write_meta
+    from pdf2md_agent.cache import CacheLayout, write_meta
 
     pdf = tmp_path / "fake.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%fake\n")
@@ -250,16 +250,16 @@ def test_run_pipeline_reformat_skips_extractor_and_rewrites_format(
     llm = MagicMock()
     retry = RetryConfig(max_attempts=1, initial_delay=0.0, backoff=1.0, max_delay=0.0, jitter=0.0)
 
-    with patch("convertpdf.crew.runner.render_pdf", return_value=pages), \
-         patch("convertpdf.crew.runner.plan_for_image") as plan, \
-         patch("convertpdf.crew.runner.estimate_text_tokens", return_value=10), \
-         patch("convertpdf.crew.runner.estimate_image_tokens", return_value=10), \
-         patch("convertpdf.crew.runner.make_vision_llm", return_value=llm), \
-         patch("convertpdf.crew.runner._run_format_summarize_only") as helper, \
-         patch("convertpdf.crew.runner.call_with_retry"), \
-         patch("convertpdf.crew.runner.make_extractor") as extractor_factory, \
-         patch("convertpdf.crew.runner.make_formatter"), \
-         patch("convertpdf.crew.runner.make_summarize_task"):
+    with patch("pdf2md_agent.crew.runner.render_pdf", return_value=pages), \
+         patch("pdf2md_agent.crew.runner.plan_for_image") as plan, \
+         patch("pdf2md_agent.crew.runner.estimate_text_tokens", return_value=10), \
+         patch("pdf2md_agent.crew.runner.estimate_image_tokens", return_value=10), \
+         patch("pdf2md_agent.crew.runner.make_vision_llm", return_value=llm), \
+         patch("pdf2md_agent.crew.runner._run_format_summarize_only") as helper, \
+         patch("pdf2md_agent.crew.runner.call_with_retry"), \
+         patch("pdf2md_agent.crew.runner.make_extractor") as extractor_factory, \
+         patch("pdf2md_agent.crew.runner.make_formatter"), \
+         patch("pdf2md_agent.crew.runner.make_summarize_task"):
         plan.return_value = type("D", (), {"total": 100, "fits": True, "needed_long_side": 1536, "reason": "test"})()
         helper.return_value = ("# Real Body\n\n(no footer)\n", "sum", False)
 
@@ -284,7 +284,7 @@ def test_run_pipeline_reformat_falls_back_when_extract_missing(
     tmp_path: Path,
 ):
     """If extract.txt is missing, --reformat falls through to the full pipeline."""
-    from convertpdf.cache import CacheLayout, write_meta
+    from pdf2md_agent.cache import CacheLayout, write_meta
 
     pdf = tmp_path / "fake.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%fake\n")
@@ -302,21 +302,21 @@ def test_run_pipeline_reformat_falls_back_when_extract_missing(
     llm = MagicMock()
     retry = RetryConfig(max_attempts=1, initial_delay=0.0, backoff=1.0, max_delay=0.0, jitter=0.0)
 
-    with patch("convertpdf.crew.runner.render_pdf", return_value=pages), \
-         patch("convertpdf.crew.runner.plan_for_image") as plan, \
-         patch("convertpdf.crew.runner.estimate_text_tokens", return_value=10), \
-         patch("convertpdf.crew.runner.estimate_image_tokens", return_value=10), \
-         patch("convertpdf.crew.runner.make_vision_llm", return_value=llm), \
-         patch("convertpdf.crew.runner._run_format_summarize_only") as helper, \
-         patch("convertpdf.crew.runner.call_with_retry"), \
-         patch("convertpdf.crew.runner.make_extractor"), \
-         patch("convertpdf.crew.runner.make_formatter"), \
-         patch("convertpdf.crew.runner.make_format_task") as format_task_factory, \
-         patch("convertpdf.crew.runner.make_extract_task") as extract_task_factory, \
-         patch("convertpdf.crew.runner.make_summarize_task"):
+    with patch("pdf2md_agent.crew.runner.render_pdf", return_value=pages), \
+         patch("pdf2md_agent.crew.runner.plan_for_image") as plan, \
+         patch("pdf2md_agent.crew.runner.estimate_text_tokens", return_value=10), \
+         patch("pdf2md_agent.crew.runner.estimate_image_tokens", return_value=10), \
+         patch("pdf2md_agent.crew.runner.make_vision_llm", return_value=llm), \
+         patch("pdf2md_agent.crew.runner._run_format_summarize_only") as helper, \
+         patch("pdf2md_agent.crew.runner.call_with_retry"), \
+         patch("pdf2md_agent.crew.runner.make_extractor"), \
+         patch("pdf2md_agent.crew.runner.make_formatter"), \
+         patch("pdf2md_agent.crew.runner.make_format_task") as format_task_factory, \
+         patch("pdf2md_agent.crew.runner.make_extract_task") as extract_task_factory, \
+         patch("pdf2md_agent.crew.runner.make_summarize_task"):
         plan.return_value = type("D", (), {"total": 100, "fits": True, "needed_long_side": 1536, "reason": "test"})()
-        with patch("convertpdf.crew.runner.Crew") as crew_cls, \
-             patch("convertpdf.crew.runner._output", return_value="STUB MD"):
+        with patch("pdf2md_agent.crew.runner.Crew") as crew_cls, \
+             patch("pdf2md_agent.crew.runner._output", return_value="STUB MD"):
             crew = MagicMock()
             crew.kickoff.return_value = None
             crew_cls.return_value = crew
@@ -339,7 +339,7 @@ def test_run_pipeline_reformat_does_not_call_extract_when_resume_triggers(
 ):
     """--resume --reformat: when both extract.txt AND format.md exist, the
     resume short-circuit fires and reformat is not even consulted."""
-    from convertpdf.cache import CacheLayout, write_meta
+    from pdf2md_agent.cache import CacheLayout, write_meta
 
     pdf = tmp_path / "fake.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%fake\n")
@@ -359,9 +359,9 @@ def test_run_pipeline_reformat_does_not_call_extract_when_resume_triggers(
     llm = MagicMock()
     retry = RetryConfig(max_attempts=1, initial_delay=0.0, backoff=1.0, max_delay=0.0, jitter=0.0)
 
-    with patch("convertpdf.crew.runner.render_pdf", return_value=pages), \
-         patch("convertpdf.crew.runner._run_format_summarize_only") as helper, \
-         patch("convertpdf.crew.runner.make_extractor") as extractor_factory:
+    with patch("pdf2md_agent.crew.runner.render_pdf", return_value=pages), \
+         patch("pdf2md_agent.crew.runner._run_format_summarize_only") as helper, \
+         patch("pdf2md_agent.crew.runner.make_extractor") as extractor_factory:
         results = run_pipeline(
             pages=pages, layout=layout, with_summary=False, resume=True,
             text_hint=False, llm=llm, retry_config=retry,
@@ -392,7 +392,7 @@ def test_cli_rejects_reformat_with_no_intermediates(tmp_path: Path):
     pdf.write_bytes(b"%PDF-1.4\n%fake\n")
     out = tmp_path / "out.md"
     proc = subprocess.run(
-        [sys.executable, "-m", "convertpdf", str(pdf),
+        [sys.executable, "-m", "pdf2md_agent", str(pdf),
          "-o", str(out), "--reformat", "--no-intermediates"],
         capture_output=True, text=True,
     )
@@ -435,11 +435,11 @@ def test_run_format_summarize_only_falls_back_on_validation_error(
         max_attempts=1, initial_delay=0.0, backoff=1.0, max_delay=0.0, jitter=0.0
     )
 
-    with patch("convertpdf.crew.runner.make_formatter"), \
-         patch("convertpdf.crew.runner.make_summarizer"), \
-         patch("convertpdf.crew.runner.make_format_task_from_extract_file") as mk_fmt_task, \
-         patch("convertpdf.crew.runner.make_summarize_task") as mk_sum_task, \
-         patch("convertpdf.crew.runner.Crew") as crew_cls:
+    with patch("pdf2md_agent.crew.runner.make_formatter"), \
+         patch("pdf2md_agent.crew.runner.make_summarizer"), \
+         patch("pdf2md_agent.crew.runner.make_format_task_from_extract_file") as mk_fmt_task, \
+         patch("pdf2md_agent.crew.runner.make_summarize_task") as mk_sum_task, \
+         patch("pdf2md_agent.crew.runner.Crew") as crew_cls:
         format_t = MagicMock()
         summarize_t = MagicMock()
         mk_fmt_task.return_value = format_t
@@ -490,11 +490,11 @@ def test_run_format_summarize_only_falls_back_on_transient_error(
         max_attempts=1, initial_delay=0.0, backoff=1.0, max_delay=0.0, jitter=0.0
     )
 
-    with patch("convertpdf.crew.runner.make_formatter"), \
-         patch("convertpdf.crew.runner.make_summarizer"), \
-         patch("convertpdf.crew.runner.make_format_task_from_extract_file") as mk_fmt_task, \
-         patch("convertpdf.crew.runner.make_summarize_task") as mk_sum_task, \
-         patch("convertpdf.crew.runner.Crew") as crew_cls:
+    with patch("pdf2md_agent.crew.runner.make_formatter"), \
+         patch("pdf2md_agent.crew.runner.make_summarizer"), \
+         patch("pdf2md_agent.crew.runner.make_format_task_from_extract_file") as mk_fmt_task, \
+         patch("pdf2md_agent.crew.runner.make_summarize_task") as mk_sum_task, \
+         patch("pdf2md_agent.crew.runner.Crew") as crew_cls:
         format_t = MagicMock()
         summarize_t = MagicMock()
         mk_fmt_task.return_value = format_t

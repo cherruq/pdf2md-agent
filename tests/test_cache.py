@@ -1,10 +1,10 @@
-"""Tests for convertpdf.cache."""
+"""Tests for pdf2md_agent.cache."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from convertpdf.cache import write_meta
+from pdf2md_agent.cache import write_meta
 
 
 def test_write_meta_without_pages(tmp_path: Path) -> None:

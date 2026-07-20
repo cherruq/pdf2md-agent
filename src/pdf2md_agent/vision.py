@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from crewai import LLM
 
-from convertpdf.config import MODEL_NAME, OPENAI_BASE_URL, require_api_key
+from pdf2md_agent.config import MODEL_NAME, OPENAI_BASE_URL, require_api_key
 
 
 def make_vision_llm() -> LLM:

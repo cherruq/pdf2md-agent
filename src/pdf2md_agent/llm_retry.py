@@ -32,7 +32,7 @@ from openai import (
 )
 
 
-log = logging.getLogger("convertpdf.llm_retry")
+log = logging.getLogger("pdf2md_agent.llm_retry")
 
 T = TypeVar("T")
 

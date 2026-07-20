@@ -1,10 +1,10 @@
-"""Tests for convertpdf.pages."""
+"""Tests for pdf2md_agent.pages."""
 from __future__ import annotations
 
 import argparse
 import pytest
 
-from convertpdf.pages import parse_page_spec, resolve_pages
+from pdf2md_agent.pages import parse_page_spec, resolve_pages
 
 
 # --- parse_page_spec ---------------------------------------------------------

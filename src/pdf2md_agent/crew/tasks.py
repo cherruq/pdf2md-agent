@@ -12,7 +12,7 @@ from pathlib import Path
 
 from crewai import Agent, Task
 
-from convertpdf.crew.multimodal_patch import patch_add_image_tool
+from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
 
 # Idempotent: ensures AddImageTool converts local paths to data: URLs and
 # re-encodes them as JPEG (long-side capped) before sending them to

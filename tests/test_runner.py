@@ -1,4 +1,4 @@
-"""Tests for convertpdf.crew.runner's retry + fallback wiring."""
+"""Tests for pdf2md_agent.crew.runner's retry + fallback wiring."""
 from __future__ import annotations
 
 import logging
@@ -10,10 +10,10 @@ import pytest
 from openai import APITimeoutError, BadRequestError
 from pydantic import ValidationError
 
-from convertpdf.cache import CacheLayout
-from convertpdf.crew import runner
-from convertpdf.crew.runner import PageImage, run_pipeline
-from convertpdf.llm_retry import RetryConfig
+from pdf2md_agent.cache import CacheLayout
+from pdf2md_agent.crew import runner
+from pdf2md_agent.crew.runner import PageImage, run_pipeline
+from pdf2md_agent.llm_retry import RetryConfig
 
 
 def _response(status: int) -> httpx.Response:
@@ -74,7 +74,7 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
 
         with patch.object(runner, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _always_timeout
-            caplog.set_level(logging.INFO, logger="convertpdf.runner")
+            caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
             results = run_pipeline(
                 pages=[page],
                 layout=layout,
@@ -194,7 +194,7 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
          patch.object(runner, "make_format_task", return_value=format_t):
         with patch.object(runner, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _raise_task_output_validation_error
-            caplog.set_level(logging.INFO, logger="convertpdf.runner")
+            caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
             results = run_pipeline(
                 pages=[page],
                 layout=layout,

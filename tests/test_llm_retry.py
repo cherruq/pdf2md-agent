@@ -1,4 +1,4 @@
-"""Tests for convertpdf.llm_retry."""
+"""Tests for pdf2md_agent.llm_retry."""
 from __future__ import annotations
 
 import httpx
@@ -12,7 +12,7 @@ from openai import (
     RateLimitError,
 )
 
-from convertpdf.llm_retry import RetryConfig, call_with_retry, is_transient
+from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient
 
 
 def _response(status: int) -> httpx.Response:
@@ -183,7 +183,7 @@ def test_call_with_retry_jitter_stays_within_bounds() -> None:
 
 
 def test_call_with_retry_label_is_passed_through(caplog) -> None:
-    caplog.set_level("WARNING", logger="convertpdf.llm_retry")
+    caplog.set_level("WARNING", logger="pdf2md_agent.llm_retry")
 
     def fn() -> None:
         raise APITimeoutError(request=_request())

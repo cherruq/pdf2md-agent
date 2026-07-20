@@ -1,10 +1,10 @@
-"""Tests for convertpdf.vision (LLM factory wiring)."""
+"""Tests for pdf2md_agent.vision (LLM factory wiring)."""
 from __future__ import annotations
 
 import pytest
 
-from convertpdf import config
-from convertpdf.vision import make_vision_llm
+from pdf2md_agent import config
+from pdf2md_agent.vision import make_vision_llm
 
 
 def test_make_vision_llm_uses_minimax_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

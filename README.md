@@ -1,10 +1,10 @@
-# convertpdf
+# pdf2md-agent
 
 > Convert any PDF to clean, language-preserving Markdown — powered by a CrewAI
 > vision pipeline against the MiniMax-M3 endpoint (or any OpenAI-compatible
 > vision API you point it at).
 
-`convertpdf` renders each page of a PDF to an image, hands the image to a
+`pdf2md-agent` renders each page of a PDF to an image, hands the image to a
 chain of small vision-language agents (extractor → formatter → running
 summarizer), and emits strict CommonMark Markdown that preserves the source
 language verbatim — including CJK content.
@@ -36,25 +36,25 @@ It is designed to be robust on adversarial inputs:
 
 ## Installation
 
-`convertpdf` requires Python **3.10+**.
+`pdf2md-agent` requires Python **3.10+**.
 
 ```bash
 # Recommended: use uv (https://github.com/astral-sh/uv)
-git clone https://github.com/cherruq/convertpdf.git
-cd convertpdf
+git clone https://github.com/cherruq/pdf2md-agent.git
+cd pdf2md-agent
 uv sync
-uv run convertpdf --help
+uv run pdf2md-agent --help
 ```
 
 Or with `pip`:
 
 ```bash
-git clone https://github.com/cherruq/convertpdf.git
-cd convertpdf
+git clone https://github.com/cherruq/pdf2md-agent.git
+cd pdf2md-agent
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
-convertpdf --help
+pdf2md-agent --help
 ```
 
 ## Quick start
@@ -65,7 +65,7 @@ cp .env.example .env
 # then edit .env and set OPENAI_API_KEY (and optionally OPENAI_BASE_URL)
 
 # 2. Convert a PDF
-convertpdf input.pdf -o output.md
+pdf2md-agent input.pdf -o output.md
 ```
 
 Output is a single Markdown file. Pages are separated by `\n\n---\n\n` and
@@ -73,22 +73,22 @@ the original 1-based page numbers are preserved.
 
 ```bash
 # Convert only a subset of pages (1-based, ranges allowed)
-convertpdf input.pdf -o output.md --pages '1-5,8,11-13'
+pdf2md-agent input.pdf -o output.md --pages '1-5,8,11-13'
 
 # Render at higher DPI for dense formulas / small fonts
-convertpdf input.pdf -o output.md --dpi 200
+pdf2md-agent input.pdf -o output.md --dpi 200
 
 # Re-run only the formatter on previously-extracted pages, dropping headers
 # and footers (requires --intermediates / cache)
-convertpdf input.pdf -o output.md --reformat
+pdf2md-agent input.pdf -o output.md --reformat
 
 # Resume a partially-failed run (re-uses per-page cached outputs)
-convertpdf input.pdf -o output.md --resume
+pdf2md-agent input.pdf -o output.md --resume
 ```
 
 ## Configuration
 
-`convertpdf` reads its config from environment variables (and `.env` if
+`pdf2md-agent` reads its config from environment variables (and `.env` if
 present via `python-dotenv`). Every variable also has a CLI flag that
 overrides the env value for the current invocation.
 
@@ -98,29 +98,29 @@ overrides the env value for the current invocation.
 |---|---|---|
 | `OPENAI_BASE_URL` | `https://api.minimaxi.com/v1` | OpenAI-compatible endpoint. Override to point at any other vision API. |
 | `OPENAI_API_KEY` | _(required)_ | API key for the endpoint above. |
-| `CONVERTPDF_MODEL` | `MiniMax-M3` | Vision model name to send in the request. |
+| `PDF2MD_AGENT_MODEL` | `MiniMax-M3` | Vision model name to send in the request. |
 
 ### Token-budget / image-downscale
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CONVERTPDF_CTX_LIMIT` | `2013` | Model context-window token limit the runner budgets against. |
-| `CONVERTPDF_TOKEN_BUDGET_SAFETY` | `0.85` | Fraction of `ctx_limit` the planner will spend per call. |
-| `CONVERTPDF_IMAGE_LONG_SIDE` | `1536` | Long-side pixel cap for inlined page JPEGs. Lower ⇒ smaller payloads, worse OCR. |
-| `CONVERTPDF_IMAGE_MIN_LONG_SIDE` | `768` | Lower bound for the binary search — never resize below this. |
-| `CONVERTPDF_IMAGE_JPEG_QUALITY` | `85` | JPEG quality (1–95) used by the in-memory downscaler. |
-| `CONVERTPDF_MAX_SUMMARY_CHARS` | `800` | Maximum running-summary size fed into the next extractor. |
+| `PDF2MD_AGENT_CTX_LIMIT` | `2013` | Model context-window token limit the runner budgets against. |
+| `PDF2MD_AGENT_TOKEN_BUDGET_SAFETY` | `0.85` | Fraction of `ctx_limit` the planner will spend per call. |
+| `PDF2MD_AGENT_IMAGE_LONG_SIDE` | `1536` | Long-side pixel cap for inlined page JPEGs. Lower ⇒ smaller payloads, worse OCR. |
+| `PDF2MD_AGENT_IMAGE_MIN_LONG_SIDE` | `768` | Lower bound for the binary search — never resize below this. |
+| `PDF2MD_AGENT_IMAGE_JPEG_QUALITY` | `85` | JPEG quality (1–95) used by the in-memory downscaler. |
+| `PDF2MD_AGENT_MAX_SUMMARY_CHARS` | `800` | Maximum running-summary size fed into the next extractor. |
 
 ### LLM retry / fallback
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CONVERTPDF_MAX_RETRIES` | `4` | Total LLM call attempts per page (initial + retries). |
-| `CONVERTPDF_RETRY_INITIAL_DELAY` | `1.0` | Initial retry delay in seconds. |
-| `CONVERTPDF_RETRY_BACKOFF` | `2.0` | Exponential backoff multiplier between retries. |
-| `CONVERTPDF_RETRY_MAX_DELAY` | `30.0` | Per-attempt delay cap. |
-| `CONVERTPDF_RETRY_JITTER` | `0.25` | Jitter ratio in `[0.0, 1.0]`. |
-| `CONVERTPDF_FALLBACK_TO_TEXT` | `true` | If `true`, fall back to the PDF's native text layer on retry exhaustion; if `false`, raise. |
+| `PDF2MD_AGENT_MAX_RETRIES` | `4` | Total LLM call attempts per page (initial + retries). |
+| `PDF2MD_AGENT_RETRY_INITIAL_DELAY` | `1.0` | Initial retry delay in seconds. |
+| `PDF2MD_AGENT_RETRY_BACKOFF` | `2.0` | Exponential backoff multiplier between retries. |
+| `PDF2MD_AGENT_RETRY_MAX_DELAY` | `30.0` | Per-attempt delay cap. |
+| `PDF2MD_AGENT_RETRY_JITTER` | `0.25` | Jitter ratio in `[0.0, 1.0]`. |
+| `PDF2MD_AGENT_FALLBACK_TO_TEXT` | `true` | If `true`, fall back to the PDF's native text layer on retry exhaustion; if `false`, raise. |
 
 ### Pointing at a different provider
 
@@ -129,19 +129,19 @@ Any OpenAI-compatible vision endpoint works. Example: Anthropic-via-proxy.
 ```bash
 OPENAI_BASE_URL=https://your-proxy.example/v1 \
 OPENAI_API_KEY=sk-your-key \
-CONVERTPDF_MODEL=claude-3-5-sonnet \
-convertpdf paper.pdf -o paper.md
+PDF2MD_AGENT_MODEL=claude-3-5-sonnet \
+pdf2md-agent paper.pdf -o paper.md
 ```
 
 > **Important:** every page image is sent to the configured endpoint
 > inline (as a base64 data URL). Image-bearing API requests larger than
-> `CONVERTPDF_CTX_LIMIT * CONVERTPDF_TOKEN_BUDGET_SAFETY` tokens are
+> `PDF2MD_AGENT_CTX_LIMIT * PDF2MD_AGENT_TOKEN_BUDGET_SAFETY` tokens are
 > automatically downscaled.
 
 ## CLI reference
 
 ```
-convertpdf PDF -o OUTPUT [options]
+pdf2md-agent PDF -o OUTPUT [options]
 ```
 
 | Flag | Type | Default | Notes |
@@ -151,7 +151,7 @@ convertpdf PDF -o OUTPUT [options]
 | `--dpi` | int | `144` | Render DPI. 72 (smallest), 150 (text + tables), 200 (small fonts / formulas), 300+ usually overkill for vision models. |
 | `-p`, `--pages` | spec | all | `1-5,8,11-13` style subset; 1-based; preserves original page numbers in output. |
 | `--no-intermediates` | flag | off | Skip writing cache files (uses a tempdir instead). |
-| `--intermediates-dir` | path | `.convertpdf-cache/<pdf-stem>/` | Override cache directory. |
+| `--intermediates-dir` | path | `.pdf2md-agent-cache/<pdf-stem>/` | Override cache directory. |
 | `--resume` | flag | off | Reuse cached per-page outputs; only re-run missing pages. |
 | `--reformat` | flag | off | Re-run formatter (+ summarizer) on cached extractor output; drops page headers/footers/numbers. Requires `--intermediates`. |
 | `--no-summary` | flag | off | Disable the cross-page running summary (process each page independently). |
@@ -197,7 +197,7 @@ convertpdf PDF -o OUTPUT [options]
 
 ### Token-budget planner
 
-Each extract call is sized by `convertpdf.token_budget.plan_for_image`:
+Each extract call is sized by `pdf2md_agent.token_budget.plan_for_image`:
 
 1. Estimate the token cost of the **persona** + the **per-page prompt
    variables** (running summary, text-hint, render scaffold).
@@ -241,7 +241,7 @@ Disable with `--no-fallback-to-text` if you'd rather hard-fail.
 When `--intermediates` is on (the default) the runner writes:
 
 ```
-.convertpdf-cache/<pdf-stem>/
+.pdf2md-agent-cache/<pdf-stem>/
 ├── meta.json                  # pdf, dpi, with_summary, pages
 ├── summary.json               # last running summary
 └── pages/
@@ -270,7 +270,7 @@ auto-loads `.env` from the current working directory at import time.
 ### `400 context window exceeds limit` from the provider
 
 The token-budget planner already downsizes page images to stay under
-`CONVERTPDF_CTX_LIMIT * CONVERTPDF_TOKEN_BUDGET_SAFETY`. If you're still
+`PDF2MD_AGENT_CTX_LIMIT * PDF2MD_AGENT_TOKEN_BUDGET_SAFETY`. If you're still
 hitting the limit:
 
 - Lower `--image-long-side` (e.g. 1024) or `--image-quality` (e.g. 70).
@@ -283,14 +283,14 @@ hitting the limit:
 
 - Try `--dpi 200` (or higher) — small fonts / dense formulas benefit.
 - If a specific page failed, inspect
-  `.convertpdf-cache/<pdf-stem>/pages/page_NNNN_extract.txt` — that's
+  `.pdf2md-agent-cache/<pdf-stem>/pages/page_NNNN_extract.txt` — that's
   exactly what the extractor returned before the formatter cleaned it up.
 
 ### Pages keep falling back to the text-layer stub
 
 - Your endpoint may be returning a non-transient HTTP 4xx for the vision
   payload. Re-run with `--no-fallback-to-text` to surface the real error.
-- Verify the model name in `CONVERTPDF_MODEL` matches what the endpoint
+- Verify the model name in `PDF2MD_AGENT_MODEL` matches what the endpoint
   actually serves.
 
 ### `ImportError` from `crewai.tools.agent_tools.add_image_tool`
@@ -302,8 +302,8 @@ Older CrewAI versions don't expose that module path. Pin to
 
 ```bash
 # Clone and install with dev deps
-git clone https://github.com/cherruq/convertpdf.git
-cd convertpdf
+git clone https://github.com/cherruq/pdf2md-agent.git
+cd pdf2md-agent
 uv sync
 
 # Run tests
@@ -316,8 +316,8 @@ uv run pytest
 Module layout:
 
 ```
-src/convertpdf/
-├── __main__.py             # `python -m convertpdf` entry
+src/pdf2md_agent/
+├── __main__.py             # `python -m pdf2md-agent` entry
 ├── cli.py                  # argparse + atomic write
 ├── config.py               # env loading, defaults
 ├── cache.py                # per-PDF cache layout

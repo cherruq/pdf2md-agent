@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Union
 
-log = logging.getLogger("convertpdf.token_budget")
+log = logging.getLogger("pdf2md_agent.token_budget")
 
 # Heuristic bytes-per-token ratio used by estimate_image_tokens. The model in
 # use (~2k token context) allocates a fixed budget per image patch, but the

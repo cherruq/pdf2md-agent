@@ -1,4 +1,4 @@
-from convertpdf.cli import main
+from pdf2md_agent.cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -1,4 +1,4 @@
-"""Tests for convertpdf.pdf_renderer."""
+"""Tests for pdf2md_agent.pdf_renderer."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from convertpdf.pdf_renderer import render_pdf
+from pdf2md_agent.pdf_renderer import render_pdf
 
 
 def _make_pdf(path: Path, pages: int = 2) -> Path:

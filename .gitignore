@@ -56,7 +56,7 @@ Thumbs.db
 .env.local
 
 # Project runtime
-.convertpdf-cache/
+.pdf2md-agent-cache/
 .omo/
 .codegraph
 

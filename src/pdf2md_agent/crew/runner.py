@@ -16,7 +16,7 @@ from pathlib import Path
 from crewai import Crew, LLM, Process
 from pydantic import ValidationError
 
-from convertpdf.cache import (
+from pdf2md_agent.cache import (
     CacheLayout,
     PageArtifacts,
     has_cached_extract,
@@ -24,7 +24,7 @@ from convertpdf.cache import (
     read_summary,
     write_summary,
 )
-from convertpdf.config import (
+from pdf2md_agent.config import (
     CTX_LIMIT,
     IMAGE_JPEG_QUALITY,
     IMAGE_LONG_SIDE,
@@ -32,9 +32,9 @@ from convertpdf.config import (
     MAX_SUMMARY_CHARS,
     TOKEN_BUDGET_SAFETY,
 )
-from convertpdf.crew.agents import EXTRACTOR_BACKSTORY, make_extractor, make_formatter, make_summarizer
-from convertpdf.crew.multimodal_patch import patch_add_image_tool
-from convertpdf.crew.tasks import (
+from pdf2md_agent.crew.agents import EXTRACTOR_BACKSTORY, make_extractor, make_formatter, make_summarizer
+from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
+from pdf2md_agent.crew.tasks import (
     _truncate_summary,
     build_extract_description,
     make_extract_task,
@@ -42,16 +42,16 @@ from convertpdf.crew.tasks import (
     make_format_task_from_extract_file,
     make_summarize_task,
 )
-from convertpdf.llm_retry import RetryConfig, call_with_retry, is_transient
-from convertpdf.pdf_renderer import PageImage, render_pdf  # noqa: F401  re-exported so tests can patch `convertpdf.crew.runner.render_pdf` without `create=True`
-from convertpdf.token_budget import (
+from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient
+from pdf2md_agent.pdf_renderer import PageImage, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.render_pdf` without `create=True`
+from pdf2md_agent.token_budget import (
     estimate_image_tokens,
     estimate_text_tokens,
     plan_for_image,
 )
-from convertpdf.vision import make_vision_llm  # noqa: F401  re-exported so tests can patch `convertpdf.crew.runner.make_vision_llm` without `create=True`
+from pdf2md_agent.vision import make_vision_llm  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.make_vision_llm` without `create=True`
 
-log = logging.getLogger("convertpdf.runner")
+log = logging.getLogger("pdf2md_agent.runner")
 
 _THINK_OPEN = chr(60) + "think" + chr(62)
 _THINK_CLOSE = chr(60) + "/think" + chr(62)
@@ -104,7 +104,7 @@ def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_qualit
     """Render ``src`` to ``dst`` as a downscaled JPEG.
 
     Uses the same LANCZOS resampler as
-    :func:`convertpdf.crew.multimodal_patch._encode_local_image` so the
+    :func:`pdf2md_agent.crew.multimodal_patch._encode_local_image` so the
     pre-resized cache file looks identical to what the in-memory patch
     would produce inline.
     """
@@ -193,7 +193,7 @@ def run_pipeline(
     order, are: resume → reformat → full pipeline.
 
     The remaining keyword arguments are the token-budget knobs (see
-    :mod:`convertpdf.config`). All have sensible defaults.
+    :mod:`pdf2md_agent.config`). All have sensible defaults.
     """
     # Lazy-init extractor + formatter + summarizer. In --reformat mode
     # the cache short-circuit handles each page inside

@@ -6,10 +6,10 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from convertpdf.pdf_renderer import PageImage
+from pdf2md_agent.pdf_renderer import PageImage
 
 
-log = logging.getLogger("convertpdf.cache")
+log = logging.getLogger("pdf2md_agent.cache")
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from convertpdf.token_budget import (
+from pdf2md_agent.token_budget import (
     BudgetDecision,
     _est_size_at_long_side,
     _tokens_for_size,

@@ -1,4 +1,4 @@
-"""CLI entry point for convertpdf."""
+"""CLI entry point for pdf2md-agent."""
 from __future__ import annotations
 
 import argparse
@@ -11,8 +11,8 @@ import time
 import pymupdf
 from pathlib import Path
 
-from convertpdf.cache import CacheLayout, write_meta
-from convertpdf.config import (
+from pdf2md_agent.cache import CacheLayout, write_meta
+from pdf2md_agent.config import (
     CTX_LIMIT,
     FALLBACK_TO_TEXT,
     IMAGE_JPEG_QUALITY,
@@ -26,18 +26,18 @@ from convertpdf.config import (
     RETRY_MAX_DELAY,
     TOKEN_BUDGET_SAFETY,
 )
-from convertpdf.crew.runner import run_pipeline
-from convertpdf.llm_retry import RetryConfig
-from convertpdf.pages import parse_page_spec, resolve_pages
-from convertpdf.pdf_renderer import render_pdf
-from convertpdf.vision import make_vision_llm
+from pdf2md_agent.crew.runner import run_pipeline
+from pdf2md_agent.llm_retry import RetryConfig
+from pdf2md_agent.pages import parse_page_spec, resolve_pages
+from pdf2md_agent.pdf_renderer import render_pdf
+from pdf2md_agent.vision import make_vision_llm
 
-log = logging.getLogger("convertpdf")
+log = logging.getLogger("pdf2md-agent")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="convertpdf",
+        prog="pdf2md-agent",
         description="Convert a PDF to markdown via a CrewAI vision pipeline (MiniMax-M3).",
     )
     parser.add_argument("pdf", type=Path, help="Input PDF path.")
@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--intermediates-dir",
         type=Path,
         default=None,
-        help="Override the intermediates cache directory (default: .convertpdf-cache/<pdf_stem>/).",
+        help="Override the intermediates cache directory (default: .pdf2md-agent-cache/<pdf_stem>/).",
     )
     parser.add_argument(
         "--resume",
@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Total LLM call attempts per page (initial + retries). Overrides "
-            "CONVERTPDF_MAX_RETRIES. Default: 4."
+            "PDF2MD_AGENT_MAX_RETRIES. Default: 4."
         ),
     )
     parser.add_argument(
@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Initial retry delay in seconds (exponential backoff). Overrides "
-            "CONVERTPDF_RETRY_INITIAL_DELAY. Default: 1.0."
+            "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
         ),
     )
     parser.add_argument(
@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Exponential backoff multiplier between retries. Overrides "
-            "CONVERTPDF_RETRY_BACKOFF. Default: 2.0."
+            "PDF2MD_AGENT_RETRY_BACKOFF. Default: 2.0."
         ),
     )
     parser.add_argument(
@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Per-attempt retry delay cap in seconds. Overrides "
-            "CONVERTPDF_RETRY_MAX_DELAY. Default: 30.0."
+            "PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 30.0."
         ),
     )
     parser.add_argument(
@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Jitter ratio in [0.0, 1.0] applied to each retry delay to avoid "
-            "thundering-herd. Overrides CONVERTPDF_RETRY_JITTER. Default: 0.25."
+            "thundering-herd. Overrides PDF2MD_AGENT_RETRY_JITTER. Default: 0.25."
         ),
     )
     parser.add_argument(
@@ -167,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
             "rescales each page PNG to this size as JPEG at the configured "
             "quality before base64-encoding it. Lower values shrink the per-"
             "call token cost at the expense of OCR fidelity. Overrides "
-            "CONVERTPDF_IMAGE_LONG_SIDE. Default: 1536."
+            "PDF2MD_AGENT_IMAGE_LONG_SIDE. Default: 1536."
         ),
     )
     parser.add_argument(
@@ -178,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "JPEG quality (1-95) used when the runner downsamples page "
             "images. Higher values preserve detail but enlarge the per-"
-            "call token cost. Overrides CONVERTPDF_IMAGE_JPEG_QUALITY. "
+            "call token cost. Overrides PDF2MD_AGENT_IMAGE_JPEG_QUALITY. "
             "Default: 85."
         ),
     )
@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Maximum running-summary size (characters) fed into the next "
             "page's extract call and produced by the summarizer. Overrides "
-            "CONVERTPDF_MAX_SUMMARY_CHARS. Default: 800."
+            "PDF2MD_AGENT_MAX_SUMMARY_CHARS. Default: 800."
         ),
     )
     parser.add_argument(
@@ -200,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TOK",
         help=(
             "Model context-window token limit the runner budgets against. "
-            "Used only when CONVERTPDF_CTX_LIMIT is wrong. Default: 2013."
+            "Used only when PDF2MD_AGENT_CTX_LIMIT is wrong. Default: 2013."
         ),
     )
     return parser
@@ -217,10 +217,10 @@ def _resolve_layout(
     is removed on context exit.
     """
     if keep_intermediates:
-        root = override if override is not None else Path(".convertpdf-cache") / pdf.stem
+        root = override if override is not None else Path(".pdf2md-agent-cache") / pdf.stem
         return CacheLayout.for_pdf(root, pdf), root / "pages"
 
-    td = Path(tempfile.mkdtemp(prefix="convertpdf_"))
+    td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
     pages = td / "pages"
     pages.mkdir()
     return (
@@ -349,7 +349,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
             reformat=args.reformat,
         )
 
-    with tempfile.TemporaryDirectory(prefix="convertpdf_") as td_str:
+    with tempfile.TemporaryDirectory(prefix="pdf2md_agent_") as td_str:
         td = Path(td_str)
         pages_dir = td / "pages"
         pages_dir.mkdir()
