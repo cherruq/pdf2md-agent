@@ -36,6 +36,60 @@ from pdf2md_agent.vision import make_vision_llm
 log = logging.getLogger("pdf2md-agent")
 
 
+def _safe_intermediates_dir(value: str) -> Path:
+    """argparse ``type=`` for ``--intermediates-dir``.
+
+    Rejects values that contain ``..`` path segments so a malicious or
+    mistaken flag cannot point the cache directory outside the working
+    tree (path-traversal guard, D11-N02).
+    """
+    p = Path(value)
+    if any(part == ".." for part in p.parts):
+        raise argparse.ArgumentTypeError(
+            f"--intermediates-dir must not contain '..' segments: {value!r}"
+        )
+    return p
+
+
+# Windows reserved device names. ``CreateFile`` rejects these as bare
+# filenames (with or without an extension), and ``mkdir`` on a reserved
+# name surfaces as an opaque OSError. ``CON``, ``PRN``, ``AUX``, ``NUL``
+# plus ``COM1``-``COM9`` and ``LPT1``-``LPT9``. Case-insensitive on Windows.
+_WINDOWS_RESERVED_NAMES: frozenset[str] = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def _safe_cache_stem(stem: str) -> str:
+    """Return a filesystem-safe cache directory name derived from ``stem``.
+
+    On Windows, the bare filenames ``CON``, ``PRN``, ``AUX``, ``NUL``,
+    ``COM1``-``COM9``, and ``LPT1``-``LPT9`` are reserved device names and
+    cannot be used as a directory name — ``mkdir`` on ``.pdf2md-agent-cache/CON``
+    fails with an opaque OSError. Trailing dots / spaces and leading
+    whitespace are likewise rejected. We append a single ``_`` so the
+    cache lives at ``<reserved>_`` instead of crashing the run.
+
+    On non-Windows platforms the reservation does not apply; we still
+    strip trailing dots/spaces defensively for portability.
+
+    Case-collision (D16-002): on case-insensitive filesystems (NTFS,
+    APFS, HFS+) two PDFs whose stems differ only in case map to the
+    same cache directory. We do not canonicalize here — instead, callers
+    are warned via this function's docstring to pick distinct stems.
+    """
+    if not stem:
+        return "_"
+    candidate = stem.rstrip(" .")
+    if not candidate:
+        return "_"
+    if sys.platform == "win32" and candidate.upper() in _WINDOWS_RESERVED_NAMES:
+        return candidate + "_"
+    return candidate
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pdf2md-agent",
@@ -84,7 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--intermediates-dir",
-        type=Path,
+        type=_safe_intermediates_dir,
         default=None,
         help="Override the intermediates cache directory (default: .pdf2md-agent-cache/<pdf_stem>/).",
     )
@@ -229,7 +283,7 @@ def _resolve_layout(
     is removed on context exit.
     """
     if keep_intermediates:
-        root = override if override is not None else Path(".pdf2md-agent-cache") / pdf.stem
+        root = override if override is not None else Path(".pdf2md-agent-cache") / _safe_cache_stem(pdf.stem)
         return CacheLayout.for_pdf(root, pdf), root / "pages"
 
     td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
@@ -253,24 +307,37 @@ def _atomic_write_text(path: Path, content: str) -> None:
     producing a truncated output. The temp file uses a randomized suffix and
     lives in the same directory as ``path`` so ``os.replace`` is atomic on
     POSIX and Windows alike.
+
+    The temp file is opened with ``O_NOFOLLOW`` (when available) and mode
+    ``0o600`` so a pre-existing symlink at the temp path cannot redirect the
+    write to an attacker-controlled location.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
+    # Reserve a unique name; the fd from mkstemp is closed immediately
+    # and we re-open with O_NOFOLLOW below so a symlink at tmp_name
+    # cannot redirect the write.
+    _fd_unused, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
         suffix=".tmp",
         dir=path.parent,
-        delete=False,
-        mode="w",
-        encoding="utf-8",
-    ) as tmp:
-        tmp_path = Path(tmp.name)
+    )
+    os.close(_fd_unused)
+    tmp_path = Path(tmp_name)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(
+        tmp_name,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow,
+        0o600,
+    )
+    try:
         try:
-            tmp.write(content)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
+            os.write(fd, content.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     try:
         os.replace(tmp_path, path)
     except Exception:
@@ -335,6 +402,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
             return 1
         finally:
             doc.close()
+
+    # Defensive empty-pages guard: ``resolve_pages`` raises on a 0-page
+    # PDF, so reaching here implies ``--pages`` filtered everything out.
+    if args.pages is not None and not resolved_pages:
+        print("ERROR: PDF has no pages to process.", file=sys.stderr)
+        raise SystemExit(1)
 
     if args.reformat and args.no_intermediates:
         print(

@@ -15,6 +15,7 @@ from pdf2md_agent.cache import (
     read_summary,
     write_summary,
 )
+from pdf2md_agent.cli import _atomic_write_text, _safe_cache_stem, _safe_intermediates_dir
 from pdf2md_agent.crew.runner import _strip_think
 from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
 
@@ -170,3 +171,85 @@ def test_cli_main_missing_pdf_returns_1(capsys) -> None:
     assert rc == 1
     err = capsys.readouterr().err
     assert "input PDF not found" in err
+
+
+# --- _atomic_write_text (D11-N01) ------------------------------------------
+
+
+def test_atomic_write_round_trip(tmp_path: Path) -> None:
+    p = tmp_path / "out.md"
+    _atomic_write_text(p, "hello world")
+    assert p.read_text(encoding="utf-8") == "hello world"
+
+
+def test_atomic_write_creates_parent(tmp_path: Path) -> None:
+    p = tmp_path / "nested" / "out.md"
+    _atomic_write_text(p, "data")
+    assert p.read_text(encoding="utf-8") == "data"
+
+
+def test_atomic_write_mode_is_0o600_on_posix(tmp_path: Path) -> None:
+    """Verifies the new os.open(..., 0o600) path is exercised (D11-N01)."""
+    import os
+    p = tmp_path / "out.md"
+    _atomic_write_text(p, "new")
+    mode = os.stat(p).st_mode & 0o777
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+# --- _safe_intermediates_dir (D11-N02 / D10-N03) --------------------------
+
+
+def test_safe_intermediates_dir_accepts_normal_path() -> None:
+    from pathlib import Path
+    result = _safe_intermediates_dir("out/cache")
+    assert isinstance(result, Path)
+
+
+def test_safe_intermediates_dir_rejects_dotdot() -> None:
+    import argparse
+    with pytest.raises(argparse.ArgumentTypeError, match=r"\.\."):
+        _safe_intermediates_dir("foo/../etc")
+
+
+def test_cli_parse_rejects_traversal_intermediates_dir() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args([
+            "in.pdf", "-o", "x.md",
+            "--intermediates-dir", "../escape",
+        ])
+
+
+# --- _safe_cache_stem (D16-001 / D16-002 / D16-003) -----------------------
+
+
+def test_safe_cache_stem_regular_passthrough() -> None:
+    assert _safe_cache_stem("report") == "report"
+    assert _safe_cache_stem("annual-2026") == "annual-2026"
+
+
+def test_safe_cache_stem_strips_trailing_dot_or_space() -> None:
+    assert _safe_cache_stem("trailing.") == "trailing"
+    assert _safe_cache_stem("trailing. ") == "trailing"
+
+
+def test_safe_cache_stem_empty_returns_underscore() -> None:
+    assert _safe_cache_stem("") == "_"
+    assert _safe_cache_stem("...") == "_"
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform != "win32",
+    reason="reserved-name suffix is Windows-only behaviour",
+)
+def test_safe_cache_stem_reserved_name_on_windows() -> None:
+    assert _safe_cache_stem("CON") == "CON_"
+    assert _safe_cache_stem("nul") == "nul_"
+    assert _safe_cache_stem("COM1") == "COM1_"
+
+
+def test_safe_cache_stem_no_suffix_off_windows() -> None:
+    if __import__("sys").platform == "win32":
+        pytest.skip("non-windows variant")
+    assert _safe_cache_stem("CON") == "CON"

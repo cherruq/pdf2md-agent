@@ -42,7 +42,7 @@ from pdf2md_agent.crew.tasks import (
     make_format_task_from_extract_file,
     make_summarize_task,
 )
-from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient
+from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient, _safe_exc_summary
 from pdf2md_agent.pdf_renderer import PageImage, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.render_pdf` without `create=True`
 from pdf2md_agent.token_budget import (
     estimate_image_tokens,
@@ -405,11 +405,12 @@ def run_pipeline(
             if not fallback_to_text or not is_transient(exc):
                 raise
             log.error(
-                "  [%d/%d] page %d: vision pipeline failed after retries; "
+                "  [%d/%d] page %d: vision pipeline failed after retries (%s); "
                 "falling back to text layer",
                 idx,
                 total,
                 page.page_number,
+                _safe_exc_summary(exc),
             )
             results.append(_record_text_layer_fallback(
                 idx=idx,
@@ -526,8 +527,9 @@ def _run_format_summarize_only(
         if not fallback_to_text or not is_transient(exc):
             raise
         log.error(
-            "  page %d: reformat failed after retries; writing extract.txt as-is",
+            "  page %d: reformat failed after retries (%s); writing extract.txt as-is",
             page_number,
+            _safe_exc_summary(exc),
         )
         format_md = artifacts.extract_text.read_text(encoding="utf-8")
         summary_out = summary_in

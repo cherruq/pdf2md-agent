@@ -21,6 +21,15 @@ import re
 _TOKEN_RE = re.compile(r"^\s*(\d+)\s*$")
 _RANGE_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d+)\s*$")
 
+# DoS guard: cap the width of any single "N-M" range. Without this,
+# ``--pages 1-999999999999`` would materialize a list of that many
+# integers before we ever reach ``resolve_pages`` (which only sees a
+# positive-integer list and can't tell it came from a huge range).
+# 10_000 pages is roughly the largest real-world PDF a single user would
+# process; beyond that, the spec is almost certainly adversarial or
+# a typo (e.g. meant 1-999 and the trailing 9 was lost).
+_MAX_RANGE_SPAN = 10_000
+
 
 def _err(msg: str) -> argparse.ArgumentTypeError:
     return argparse.ArgumentTypeError(msg)
@@ -57,6 +66,11 @@ def parse_page_spec(spec: str) -> list[int]:
                 raise _err(f"page numbers must be >= 1, got {item!r}")
             if start > end:
                 raise _err(f"range start must be <= end, got {item!r}")
+            if end - start + 1 > _MAX_RANGE_SPAN:
+                raise _err(
+                    f"range {item!r} exceeds {_MAX_RANGE_SPAN} pages "
+                    "(spec too wide; split into smaller ranges)"
+                )
             for p in range(start, end + 1):
                 if p not in seen:
                     seen.add(p)

@@ -32,6 +32,21 @@ from openai import (
 )
 
 
+def _safe_exc_summary(exc: BaseException) -> str:
+    """Return a redacted summary of ``exc`` safe to write to logs.
+
+    For ``APIStatusError`` we emit only the exception class name, HTTP
+    status code, and ``str(exc)`` (which is the OpenAI SDK's own
+    redacted message — it deliberately excludes ``exc.body``). This
+    prevents provider response payloads (which can contain user
+    content, internal stack traces, or other sensitive data) from
+    landing in log files.
+    """
+    if isinstance(exc, APIStatusError):
+        return f"{type(exc).__name__}: status={exc.status_code}: {exc}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 log = logging.getLogger("pdf2md_agent.llm_retry")
 
 T_co = TypeVar("T_co")
@@ -115,11 +130,10 @@ def call_with_retry(
             last_exc = exc
             if attempt >= config.max_attempts:
                 log.error(
-                    "%s: giving up after %d attempt(s): %s: %s",
+                    "%s: giving up after %d attempt(s): %s",
                     label,
                     attempt,
-                    type(exc).__name__,
-                    exc,
+                    _safe_exc_summary(exc),
                 )
                 raise
             jittered = delay * (1.0 + random.uniform(-config.jitter, config.jitter))
@@ -130,7 +144,7 @@ def call_with_retry(
                 type(exc).__name__,
                 attempt,
                 config.max_attempts,
-                exc,
+                _safe_exc_summary(exc),
                 wait,
             )
             sleep(wait)
