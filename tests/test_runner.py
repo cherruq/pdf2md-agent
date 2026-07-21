@@ -253,12 +253,27 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
 def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
     """The non-reformat path must continue to use the strict, verbatim
     formatter persona — never the layout-aware one. This guards against
-    accidental swap when make_formatter() is refactored."""
+    accidental swap when make_formatter() is refactored.
+
+    Strengthened (D8-012): also verifies the formatter's CommonMark-shaped
+    output propagates through to the returned ``PageResult.markdown`` and
+    the on-disk ``format.md`` — not merely that ``result["md_text"]``
+    exists.
+    """
     page = _page(1)
     layout = _make_layout(tmp_path, 1, "text layer content\n")
 
+    commonmark_payload = (
+        "# Section\n\n"
+        "First paragraph with **bold** text.\n\n"
+        "- bullet one\n"
+        "- bullet two\n\n"
+        "```python\n"
+        "print('hi')\n"
+        "```"
+    )
     extract_t = _FakeTask(raw="extracted markdown")
-    format_t = _FakeTask(raw="formatted markdown")
+    format_t = _FakeTask(raw=commonmark_payload)
     summarize_t = _FakeTask(raw="running summary")
 
     with patch.object(runner, "make_extractor"), \
@@ -269,7 +284,7 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
         with patch.object(runner, "make_formatter") as mk:
             with patch.object(runner, "Crew") as crew_cls:
                 crew_cls.return_value.kickoff = lambda: None
-                run_pipeline(
+                results = run_pipeline(
                     pages=[page],
                     layout=layout,
                     with_summary=False,
@@ -288,3 +303,14 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
             assert called_reformat is False, (
                 "Default run_pipeline must not call make_formatter(reformat=True)"
             )
+
+    assert len(results) == 1
+    assert results[0].page_number == 1
+    assert results[0].markdown == commonmark_payload, (
+        "formatter output must propagate to PageResult.markdown verbatim"
+    )
+    assert "# Section" in results[0].markdown
+    assert "- bullet one" in results[0].markdown
+    assert "```python" in results[0].markdown
+    on_disk = layout.page_format_path(1).read_text(encoding="utf-8")
+    assert on_disk == commonmark_payload
