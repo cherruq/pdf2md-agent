@@ -42,8 +42,15 @@ _VERBATIM_RULE = (
 
 _SUMMARY_TRUNCATION_SUFFIX = "[…summary truncated to fit context window]"
 
+# Joined rule text shared by every task that asks the LLM to write verbatim
+# Markdown: the formatter factory (and its file-fed sibling) and the
+# extractor's task description. The ``chr(60)/chr(62)`` escape around
+# ``<think>`` is load-bearing (see AGENTS.md → crew/ → CONVENTIONS); do not
+# "refactor" to a literal tag.
+_COMMON_TASK_RULES: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
+
 # Joined rule text consumed by the token-budget planner.
-TASKS_RULES_TEXT: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
+TASKS_RULES_TEXT: str = _COMMON_TASK_RULES
 
 
 def extract_task_intro(page_path: Path) -> str:
@@ -160,9 +167,7 @@ def make_format_task(
     description = (
         "Rewrite the extracted markdown as strict CommonMark. Fix "
         "broken lists, normalize table syntax, strip OCR noise.\n\n"
-        f"{_VERBATIM_RULE}\n\n"
-        f"{_LANG_RULE}\n\n"
-        f"{_NO_REASONING}"
+        f"{_COMMON_TASK_RULES}"
     )
     if reformat:
         description += (
@@ -201,9 +206,7 @@ def make_format_task_from_extract_file(
             "Rewrite the extracted markdown below as strict CommonMark. "
             "Drop running headers, page footers, and page numbers as "
             "layout artifacts. Preserve all other text verbatim.\n\n"
-            f"{_VERBATIM_RULE}\n\n"
-            f"{_LANG_RULE}\n\n"
-            f"{_NO_REASONING}\n\n"
+            f"{_COMMON_TASK_RULES}\n\n"
             "Extracted content (read from disk; treat as ground truth):\n"
             "```\n"
             f"{text}\n"

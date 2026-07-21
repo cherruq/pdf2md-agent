@@ -248,10 +248,16 @@ def plan_for_image(
 
     limit = int(ctx_limit * safety)
     budget_for_image = max(0, limit - persona_tokens - fixed_text_tokens)
-    current_tokens = estimate_image_tokens(image_path)
-    original_bytes = (
-        image_path.stat().st_size if image_path.is_file() else 0
-    )
+    # Stat the file exactly once and derive both ``original_bytes`` and
+    # ``current_tokens`` from the cached size — avoids the double
+    # ``Path.stat()`` (one hidden inside ``estimate_image_tokens``) and
+    # the redundant ``is_file()`` probe on the same path.
+    try:
+        size = image_path.stat().st_size
+    except OSError:
+        size = 0
+    original_bytes = size
+    current_tokens = _tokens_for_size(size) if size > 0 else 0
 
     if current_tokens <= budget_for_image:
         # Already fits — recommend the standard target size for consistency.

@@ -56,9 +56,8 @@ def render_pdf(
         for page_number in page_numbers:
             page = doc.load_page(page_number - 1)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
-            png = output_dir / f"{prefix}_{page_number:04d}.png"
+            png, text = _page_artifact_paths(output_dir, prefix, page_number)
             pix.save(png)
-            text = output_dir / f"{prefix}_{page_number:04d}_text.txt"
             text.write_text(page.get_text("text"), encoding="utf-8")
             pages_out.append(
                 PageImage(
@@ -71,6 +70,20 @@ def render_pdf(
         return pages_out
     finally:
         doc.close()
+
+
+def _page_artifact_paths(
+    output_dir: Path, prefix: str, page_number: int
+) -> tuple[Path, Path]:
+    """Return ``(png_path, text_path)`` for one rendered page.
+
+    Per-page filenames embed the 1-based ``page_number``, so each call
+    produces a fresh ``Path`` pair; the helper exists to consolidate the
+    construction (matches the layout used by :mod:`pdf2md_agent.cache`)
+    and keep the render loop readable.
+    """
+    stem = f"{prefix}_{page_number:04d}"
+    return output_dir / f"{stem}.png", output_dir / f"{stem}_text.txt"
 
 
 def read_page_text(text_path: Path) -> str:

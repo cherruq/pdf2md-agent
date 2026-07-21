@@ -55,7 +55,7 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 _THINK_OPEN = chr(60) + "think" + chr(62)
 _THINK_CLOSE = chr(60) + "/think" + chr(62)
-_THINK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
+_THINK_BLOCK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
 
 
 def _strip_think(text: str) -> str:
@@ -65,7 +65,7 @@ def _strip_think(text: str) -> str:
     MiniMax-M3 endpoint sometimes leaves them in the response. Strip them
     defensively before downstream consumers see them.
     """
-    return _THINK_RE.sub("", text).strip()
+    return _THINK_BLOCK_RE.sub("", text).strip()
 
 
 def _output(output_text) -> str:
@@ -219,6 +219,10 @@ def run_pipeline(
     pipeline_started = time.monotonic()
     total = len(pages)
     phases = "extract + format + summarize" if with_summary else "extract + format"
+    # Fast-path aliases for the layout's hot ``Path`` attributes so the
+    # per-page loop avoids a repeated attribute lookup on ``layout``.
+    pages_dir = layout.pages_dir
+    summary_path = layout.summary_path
 
     extractor_persona_text = EXTRACTOR_BACKSTORY
 
@@ -249,7 +253,7 @@ def run_pipeline(
                 page_number=page.page_number,
                 artifacts=artifacts,
                 summary_in=summary,
-                summary_path=layout.summary_path,
+                summary_path=summary_path,
                 with_summary=with_summary,
                 llm=llm,
                 retry_config=retry_config,
@@ -336,7 +340,7 @@ def run_pipeline(
         )
         if needs_resize:
             if not resized_path.is_file():
-                layout.pages_dir.mkdir(parents=True, exist_ok=True)
+                pages_dir.mkdir(parents=True, exist_ok=True)
                 _resize_page_png(
                     page.image_path,
                     resized_path,
@@ -432,7 +436,7 @@ def run_pipeline(
             summary = _output(summarize_t)
             if len(summary) > max_summary_chars:
                 summary = _truncate_summary(summary, max_summary_chars)
-            write_summary(layout.summary_path, summary)
+            write_summary(summary_path, summary)
 
         elapsed = time.monotonic() - page_started
         log.info(
