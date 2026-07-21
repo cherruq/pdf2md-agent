@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 from pathlib import Path
 
 from PIL import Image
 
+
+log = logging.getLogger("pdf2md_agent.crew.multimodal_patch")
 
 _DEFAULT_TARGET_LONG_SIDE: int = 1536
 _DEFAULT_JPEG_QUALITY: int = 85
@@ -45,6 +48,16 @@ except ImportError:  # pragma: no cover
     UnidentifiedImageError = OSError  # type: ignore[assignment,misc]
 
 
+class ImageEncodeError(RuntimeError):
+    """Raised when a local image cannot be opened / decoded / re-encoded.
+
+    The LLM would otherwise hallucinate the page contents because the
+    inline image never made it into the request (D6-015). Callers
+    (CrewAI step executor / runner) should treat this as a retryable
+    / fallback-able error.
+    """
+
+
 def _encode_local_image(
     path: Path,
     *,
@@ -53,19 +66,26 @@ def _encode_local_image(
 ) -> bytes:
     """Open ``path`` with Pillow, downscale, return the JPEG bytes.
 
-    Raises ``FileNotFoundError`` if Pillow cannot open the file. The
-    runner pre-builds a downsized copy under ``layout.pages_dir`` so this
-    function almost never has to do real work, but it remains correct for
-    arbitrary inputs in tests.
+    Raises :class:`ImageEncodeError` if Pillow cannot open or re-encode
+    the file (``FileNotFoundError``, ``UnidentifiedImageError`` for a
+    non-image, etc.). The runner pre-builds a downsized copy under
+    ``layout.pages_dir`` so this function almost never has to do real
+    work, but it remains correct for arbitrary inputs in tests.
     """
-    with Image.open(path) as img:
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        if target_long_side > 0:
-            img.thumbnail((target_long_side, target_long_side), Image.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=jpeg_quality, optimize=True)
-        return buf.getvalue()
+    try:
+        with Image.open(path) as img:
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            if target_long_side > 0:
+                img.thumbnail((target_long_side, target_long_side), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=jpeg_quality, optimize=True)
+            return buf.getvalue()
+    except (FileNotFoundError, OSError, UnidentifiedImageError) as exc:
+        log.warning(
+            "_encode_local_image: cannot encode %s: %s", path, exc,
+        )
+        raise ImageEncodeError(f"cannot encode image {path}: {exc}") from exc
 
 
 def _to_data_url(
@@ -81,20 +101,21 @@ def _to_data_url(
     memory via Pillow's LANCZOS thumbnail and re-encoded as JPEG at the
     requested quality before base64 encoding — the resulting ``data:`` URL
     is small enough to stay inside the ``MiniMax-M3`` context window.
+
+    Encoding failures bubble up as :class:`ImageEncodeError` so the
+    runner can decide whether to retry / fall back (D6-015); we no
+    longer silently return the unmodified ``value``.
     """
     if not value or value.startswith(("http://", "https://", "data:")):
         return value
     path = Path(value)
     if not path.is_file():
         return value
-    try:
-        encoded = _encode_local_image(
-            path,
-            target_long_side=target_long_side,
-            jpeg_quality=jpeg_quality,
-        )
-    except (FileNotFoundError, OSError, UnidentifiedImageError):
-        return value
+    encoded = _encode_local_image(
+        path,
+        target_long_side=target_long_side,
+        jpeg_quality=jpeg_quality,
+    )
     b64 = base64.b64encode(encoded).decode("ascii")
     return f"data:image/jpeg;base64,{b64}"
 

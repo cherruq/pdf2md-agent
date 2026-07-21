@@ -10,12 +10,14 @@ import pytest
 
 from pdf2md_agent import cli
 from pdf2md_agent.cache import (
+    CacheCorruptedError,
     CacheLayout,
     is_page_complete,
     read_summary,
     write_summary,
 )
 from pdf2md_agent.cli import _atomic_write_text, _safe_cache_stem, _safe_intermediates_dir
+from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
 from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
 
@@ -75,19 +77,21 @@ def test_read_write_summary_round_trip(tmp_path: Path) -> None:
     assert read_summary(path) == "running sum text 中文"
 
 
-def test_read_summary_corrupt_returns_empty(tmp_path: Path, caplog) -> None:
+def test_read_summary_corrupt_raises_and_warns(tmp_path: Path, caplog) -> None:
     path = tmp_path / "summary.json"
     path.write_text("{not json", encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
-        assert read_summary(path) == ""
+        with pytest.raises(CacheCorruptedError):
+            read_summary(path)
     assert any("unreadable" in rec.message for rec in caplog.records)
 
 
-def test_read_summary_wrong_shape_returns_empty(tmp_path: Path, caplog) -> None:
+def test_read_summary_wrong_shape_raises_and_warns(tmp_path: Path, caplog) -> None:
     path = tmp_path / "summary.json"
     path.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
-        assert read_summary(path) == ""
+        with pytest.raises(CacheCorruptedError):
+            read_summary(path)
     assert any("not a JSON object" in rec.message for rec in caplog.records)
 
 
@@ -171,6 +175,13 @@ def test_cli_main_missing_pdf_returns_1(capsys) -> None:
     assert rc == 1
     err = capsys.readouterr().err
     assert "input PDF not found" in err
+
+
+def test_encode_local_image_non_image_raises_image_encode_error(tmp_path: Path) -> None:
+    bogus = tmp_path / "fake.jpg"
+    bogus.write_text("not an image", encoding="utf-8")
+    with pytest.raises(ImageEncodeError):
+        _encode_local_image(bogus, target_long_side=1536, jpeg_quality=85)
 
 
 # --- _atomic_write_text (D11-N01) ------------------------------------------

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import tempfile
 import time
@@ -11,7 +10,7 @@ import time
 import pymupdf
 from pathlib import Path
 
-from pdf2md_agent.cache import CacheLayout, write_meta
+from pdf2md_agent.cache import CacheLayout, atomic_write_text, write_meta
 from pdf2md_agent.config import (
     CTX_LIMIT,
     FALLBACK_TO_TEXT,
@@ -300,49 +299,7 @@ def _resolve_layout(
     )
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` via a sibling temp file + ``os.replace``.
-
-    A crash mid-write leaves the original file (if any) intact instead of
-    producing a truncated output. The temp file uses a randomized suffix and
-    lives in the same directory as ``path`` so ``os.replace`` is atomic on
-    POSIX and Windows alike.
-
-    The temp file is opened with ``O_NOFOLLOW`` (when available) and mode
-    ``0o600`` so a pre-existing symlink at the temp path cannot redirect the
-    write to an attacker-controlled location.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Reserve a unique name; the fd from mkstemp is closed immediately
-    # and we re-open with O_NOFOLLOW below so a symlink at tmp_name
-    # cannot redirect the write.
-    _fd_unused, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-    )
-    os.close(_fd_unused)
-    tmp_path = Path(tmp_name)
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(
-        tmp_name,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow,
-        0o600,
-    )
-    try:
-        try:
-            os.write(fd, content.encode("utf-8"))
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    try:
-        os.replace(tmp_path, path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+_atomic_write_text = atomic_write_text
 
 
 def _build_retry_config(args: argparse.Namespace) -> RetryConfig | None:

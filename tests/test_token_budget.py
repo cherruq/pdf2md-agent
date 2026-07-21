@@ -10,6 +10,7 @@ from PIL import Image
 from pdf2md_agent.token_budget import (
     BudgetDecision,
     _est_size_at_long_side,
+    _open_for_size,
     _tokens_for_size,
     estimate_image_tokens,
     estimate_text_tokens,
@@ -201,3 +202,15 @@ def test_plan_for_image_min_zero_raises(tmp_path: Path) -> None:
             target_long_side=768,
             min_long_side=0,
         )
+
+
+def test_open_for_size_corrupt_image_uses_bytes_fallback(tmp_path: Path) -> None:
+    bogus = tmp_path / "fake.jpg"
+    bogus.write_text("this is definitely not a JPEG", encoding="utf-8")
+    size_bytes = bogus.stat().st_size
+    w, h = _open_for_size(bogus, fallback_bytes=size_bytes)
+    assert (w, h) != (1, 1)
+    assert w > 0 and h > 0
+    assert w == h
+    expected_side = max(256, int(2 * math.sqrt(size_bytes)))
+    assert w == expected_side
