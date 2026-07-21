@@ -150,9 +150,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no-fallback-to-text",
-        action="store_false",
-        dest="fallback_to_text",
-        default=None,
+        action="store_true",
+        default=False,
+        dest="no_fallback_to_text",
         help=(
             "On retry exhaustion, raise instead of falling back to the PDF's "
             "native text layer. Default: fallback enabled."
@@ -311,9 +311,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     retry_config = _build_retry_config(args)
     if retry_config is None:
         return 1
-    fallback_to_text = (
-        args.fallback_to_text if args.fallback_to_text is not None else FALLBACK_TO_TEXT
-    )
+    fallback_to_text = FALLBACK_TO_TEXT and not args.no_fallback_to_text
 
     if not args.pdf.exists():
         print(f"error: input PDF not found: {args.pdf}", file=sys.stderr)

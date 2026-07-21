@@ -68,9 +68,9 @@ def _strip_think(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-def _output(task) -> str:
+def _output(output_text) -> str:
     """Extract clean text from a CrewAI task's output."""
-    out = getattr(task, "output", None)
+    out = getattr(output_text, "output", None)
     if out is None:
         return ""
     raw = getattr(out, "raw", None)

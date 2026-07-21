@@ -34,10 +34,10 @@ from openai import (
 
 log = logging.getLogger("pdf2md_agent.llm_retry")
 
-T = TypeVar("T")
+T_co = TypeVar("T_co")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RetryConfig:
     """Bounded exponential-backoff retry policy.
 
@@ -89,12 +89,12 @@ def is_transient(exc: BaseException) -> bool:
 
 
 def call_with_retry(
-    fn: Callable[[], T],
+    fn: Callable[[], T_co],
     *,
     config: RetryConfig = RetryConfig(),
     label: str = "llm",
     sleep: Callable[[float], None] = time.sleep,
-) -> T:
+) -> T_co:
     """Call ``fn`` with bounded exponential-backoff retry on transient failures.
 
     The caller passes a zero-arg callable so each attempt is a fresh call

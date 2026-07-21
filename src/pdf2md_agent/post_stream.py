@@ -95,7 +95,7 @@ _BLOCK_SEPARATOR = "\n\n"
 """Blank-line separator between confirmed blocks in stitched output."""
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class _Fragment:
     """One chunk the stitcher is holding or about to yield."""
 

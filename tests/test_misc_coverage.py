@@ -150,7 +150,7 @@ def test_cli_parse_known_args() -> None:
     assert args.no_intermediates is False
     assert args.no_summary is False
     assert args.no_text_hint is False
-    assert args.fallback_to_text is None  # default until env fallback
+    assert args.no_fallback_to_text is False  # default — env may still override
 
 
 def test_cli_parse_pages_spec() -> None:
