@@ -139,5 +139,3 @@ def _persona_backstory(persona: str) -> str:
 
 
 EXTRACTOR_BACKSTORY: str = _persona_backstory(EXTRACTOR_PERSONA)
-FORMATTER_BACKSTORY: str = _persona_backstory(FORMATTER_PERSONA_STRICT)
-SUMMARIZER_BACKSTORY: str = _persona_backstory(SUMMARIZER_PERSONA)

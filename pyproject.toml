@@ -6,8 +6,9 @@ requires-python = ">=3.10"
 dependencies = [
     "pymupdf>=1.24,<2",
     "crewai>=0.80,<2",
+    # openai used transitively via crewai LLM provider
     "openai>=1.0,<2",
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.0,<2",
     "Pillow>=10.0",  # image downscale / resize in multimodal_patch, runner, token_budget
 ]
 
@@ -22,7 +23,7 @@ build-backend = "hatchling.build"
 packages = ["src/pdf2md_agent"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8,<9"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

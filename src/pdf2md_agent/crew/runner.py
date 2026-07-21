@@ -69,7 +69,7 @@ def _strip_think(text: str) -> str:
     return _THINK_BLOCK_RE.sub("", text).strip()
 
 
-def _output(output_text) -> str:
+def _output(output_text: object) -> str:
     """Extract clean text from a CrewAI task's output."""
     out = getattr(output_text, "output", None)
     if out is None:
@@ -79,7 +79,7 @@ def _output(output_text) -> str:
     return _strip_think(text)
 
 
-def _text_layer_fallback(artifacts) -> str:
+def _text_layer_fallback(artifacts: PageArtifacts) -> str:
     """Build a best-effort markdown page from the PDF's native text layer.
 
     Used when the vision model is unreachable after all retries. The page's
@@ -129,7 +129,7 @@ def _record_text_layer_fallback(
     total: int,
     page_number: int,
     page_started: float,
-    artifacts,
+    artifacts: PageArtifacts,
     summary: str,
     completion_label: str,
 ) -> PageResult:
@@ -559,3 +559,12 @@ def _run_format_summarize_only(
         write_summary(summary_path, summary_out)
 
     return format_md, summary_out, did_fallback
+
+
+__all__ = [
+    "PageImage",  # re-exported from pdf2md_agent.pdf_renderer
+    "PageResult",
+    "make_vision_llm",  # re-exported from pdf2md_agent.vision
+    "render_pdf",  # re-exported from pdf2md_agent.pdf_renderer
+    "run_pipeline",
+]

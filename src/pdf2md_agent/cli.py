@@ -341,6 +341,23 @@ def cmd_convert(args: argparse.Namespace) -> int:
         print(f"error: input PDF not found: {args.pdf}", file=sys.stderr)
         return 1
 
+    # D10-N04: fail fast on non-PDF input before any tempdir/cache work.
+    try:
+        with args.pdf.open("rb") as _pdf_header_fh:
+            _pdf_header = _pdf_header_fh.read(5)
+    except OSError as _pdf_header_exc:
+        print(
+            f"error: cannot read input PDF {args.pdf}: {_pdf_header_exc}",
+            file=sys.stderr,
+        )
+        return 1
+    if not _pdf_header.startswith(b"%PDF-"):
+        print(
+            f"error: input file is not a PDF (missing %PDF- header): {args.pdf}",
+            file=sys.stderr,
+        )
+        return 1
+
     started = time.monotonic()
     keep_intermediates = not args.no_intermediates
     with_summary = not args.no_summary

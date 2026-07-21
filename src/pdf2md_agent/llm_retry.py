@@ -159,3 +159,10 @@ def call_with_retry(
     # Unreachable: the loop always returns or raises.
     assert last_exc is not None  # pragma: no cover
     raise last_exc  # pragma: no cover
+
+
+__all__ = [
+    "RetryConfig",
+    "call_with_retry",
+    "is_transient",
+]
