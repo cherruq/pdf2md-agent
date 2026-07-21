@@ -122,6 +122,12 @@ def call_with_retry(
     delay = config.initial_delay
     last_exc: Exception | None = None
     for attempt in range(1, config.max_attempts + 1):
+        log.info(
+            "%s: attempt %d/%d started",
+            label,
+            attempt,
+            config.max_attempts,
+        )
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 — predicate is `is_transient` below
@@ -138,8 +144,9 @@ def call_with_retry(
                 raise
             jittered = delay * (1.0 + random.uniform(-config.jitter, config.jitter))
             wait = max(0.0, min(jittered, config.max_delay))
-            log.warning(
-                "%s: transient %s on attempt %d/%d (%s); retrying in %.2fs",
+            log.info(
+                "%s: retrying after transient %s on attempt %d/%d (%s); "
+                "sleeping %.2fs",
                 label,
                 type(exc).__name__,
                 attempt,

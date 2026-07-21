@@ -22,12 +22,31 @@ The cap and quality are configurable per-call by the runner, defaulting to
 
 We replace ``_run`` so it returns the proper sentinel string after encoding
 local files inline. ``patch_add_image_tool()`` is idempotent.
+
+Thread-safety contract (D15-001/002/003)
+----------------------------------------
+The active resize/quality knobs are stored in module globals
+(``_patched``, ``_active_long_side``, ``_active_jpeg_quality``) so the
+inner ``_run`` closure can read them at call time without an explicit
+per-call argument. Concurrent calls to ``patch_add_image_tool()`` and
+concurrent invocations of the patched ``_run`` are serialised via a
+module-level ``threading.RLock``: writers refresh the knobs inside the
+critical section, readers snapshot them under the same lock before
+delegating to ``_to_sentinel``. ``RLock`` (not ``Lock``) is used because
+``patch_add_image_tool`` may be re-entered during early init paths and
+would otherwise deadlock on itself.
+
+The signature is intentionally unchanged — tests patch
+``pdf2md_agent.crew.runner.<name>`` and a closure refactor would
+invalidate those patch targets. The id-emponent install (only the first
+call actually installs the patched ``_run``) is preserved verbatim.
 """
 from __future__ import annotations
 
 import base64
 import io
 import logging
+import threading
 from pathlib import Path
 
 from PIL import Image
@@ -151,6 +170,12 @@ _patched = False
 _active_long_side: int = _DEFAULT_TARGET_LONG_SIDE
 _active_jpeg_quality: int = _DEFAULT_JPEG_QUALITY
 
+# Serialises concurrent writers (``patch_add_image_tool``) and readers
+# (the patched ``_run`` closure). ``RLock`` so a writer that re-enters
+# itself (e.g. via an init path that calls back into this module) does
+# not deadlock. See module docstring "Thread-safety contract" above.
+_lock = threading.RLock()
+
 
 def patch_add_image_tool(
     *,
@@ -164,20 +189,26 @@ def patch_add_image_tool(
     ``_run`` patch itself is only installed once; subsequent calls just
     refresh the module-level state the closure reads at call time.
     """
-    global _patched, _active_long_side, _active_jpeg_quality
-    _active_long_side = target_long_side
-    _active_jpeg_quality = jpeg_quality
-    if _patched:
-        return
-    from crewai.tools.agent_tools.add_image_tool import AddImageTool
+    with _lock:
+        global _patched, _active_long_side, _active_jpeg_quality
+        _active_long_side = target_long_side
+        _active_jpeg_quality = jpeg_quality
+        if _patched:
+            return
+        from crewai.tools.agent_tools.add_image_tool import AddImageTool
 
-    def _run(self, image_url: str, action=None, **kwargs):  # type: ignore[override]
-        return _to_sentinel(
-            image_url,
-            action,
-            target_long_side=_active_long_side,
-            jpeg_quality=_active_jpeg_quality,
-        )
+        def _run(self, image_url: str, action=None, **kwargs):  # type: ignore[override]
+            # Snapshot the active knobs under the lock so we never hand
+            # ``_to_sentinel`` a torn (target, quality) pair mid-update.
+            with _lock:
+                target = _active_long_side
+                quality = _active_jpeg_quality
+            return _to_sentinel(
+                image_url,
+                action,
+                target_long_side=target,
+                jpeg_quality=quality,
+            )
 
-    AddImageTool._run = _run  # type: ignore[assignment]
-    _patched = True
+        AddImageTool._run = _run  # type: ignore[assignment]
+        _patched = True

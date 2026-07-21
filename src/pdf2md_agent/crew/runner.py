@@ -30,6 +30,7 @@ from pdf2md_agent.config import (
     IMAGE_LONG_SIDE,
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
+    MODEL_NAME,
     TOKEN_BUDGET_SAFETY,
 )
 from pdf2md_agent.crew.agents import EXTRACTOR_BACKSTORY, make_extractor, make_formatter, make_summarizer
@@ -174,6 +175,7 @@ def run_pipeline(
     max_summary_chars: int = MAX_SUMMARY_CHARS,
     token_budget_safety: float = TOKEN_BUDGET_SAFETY,
     reformat: bool = False,
+    dpi: int = 144,
 ) -> list[PageResult]:
     """Run the per-page CrewAI pipeline across ``pages`` and return page results.
 
@@ -218,6 +220,16 @@ def run_pipeline(
     results: list[PageResult] = []
     pipeline_started = time.monotonic()
     total = len(pages)
+    log.info(
+        "pipeline started: pages=%d, dpi=%d, model=%s, with_summary=%s, "
+        "resume=%s, reformat=%s",
+        total,
+        dpi,
+        MODEL_NAME,
+        with_summary,
+        resume,
+        reformat,
+    )
     phases = "extract + format + summarize" if with_summary else "extract + format"
     # Fast-path aliases for the layout's hot ``Path`` attributes so the
     # per-page loop avoids a repeated attribute lookup on ``layout``.
@@ -386,7 +398,7 @@ def run_pipeline(
         except ValidationError as exc:
             if not fallback_to_text:
                 raise
-            log.error(
+            log.warning(
                 "  [%d/%d] page %d: model returned malformed response "
                 "(%s, %d validation error(s)); falling back to text layer",
                 idx,
@@ -408,7 +420,7 @@ def run_pipeline(
         except BaseException as exc:
             if not fallback_to_text or not is_transient(exc):
                 raise
-            log.error(
+            log.warning(
                 "  [%d/%d] page %d: vision pipeline failed after retries (%s); "
                 "falling back to text layer",
                 idx,
@@ -520,7 +532,7 @@ def _run_format_summarize_only(
     except ValidationError:
         if not fallback_to_text:
             raise
-        log.error(
+        log.warning(
             "  page %d: reformat produced malformed output; writing extract.txt as-is",
             page_number,
         )
@@ -530,7 +542,7 @@ def _run_format_summarize_only(
     except BaseException as exc:
         if not fallback_to_text or not is_transient(exc):
             raise
-        log.error(
+        log.warning(
             "  page %d: reformat failed after retries (%s); writing extract.txt as-is",
             page_number,
             _safe_exc_summary(exc),
