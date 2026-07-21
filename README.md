@@ -68,8 +68,12 @@ cp .env.example .env
 pdf2md-agent input.pdf -o output.md
 ```
 
-Output is a single Markdown file. Pages are separated by `\n\n---\n\n` and
-the original 1-based page numbers are preserved.
+Output is a single Markdown file. By default the per-page outputs are
+stitched into one continuous document — paragraphs, list items, and table
+rows split across a page break are merged, and the `\n\n---\n\n` page
+separator is dropped. Pass `--stitch-mode off` to restore the legacy
+separator. The original 1-based page numbers are preserved inside the
+content where the formatter emits them.
 
 ```bash
 # Convert only a subset of pages (1-based, ranges allowed)
@@ -166,6 +170,7 @@ pdf2md-agent PDF -o OUTPUT [options]
 | `--image-quality` | int | `85` | JPEG quality (1–95). |
 | `--max-summary-chars` | int | `800` | Running-summary character cap. |
 | `--ctx-limit` | int | `2013` | Model context-window token limit. |
+| `--stitch-mode` | `off` \| `heuristic` | `heuristic` | `heuristic` (default) merges paragraphs/list items/table rows split across page boundaries and drops the `\n\n---\n\n` separator. `off` preserves the legacy separator verbatim. No LLM cost. |
 
 ## How it works
 
@@ -191,7 +196,7 @@ pdf2md-agent PDF -o OUTPUT [options]
                 │     into the next page's extractor.          │
                 └──────────────────────────────────────────────┘
                           │
-                          ▼  (join with `\n\n---\n\n`)
+                          ▼  (StreamingStitcher: heuristic merge + drop `\n\n---\n\n`)
                    Markdown output
 ```
 
@@ -326,6 +331,7 @@ src/pdf2md_agent/
 ├── llm_retry.py            # bounded backoff + transient classifier
 ├── token_budget.py         # image/text estimators + planner
 ├── vision.py               # CrewAI LLM factory
+├── post_stream.py          # cross-page stitcher (StreamingStitcher + heuristic)
 └── crew/
     ├── agents.py           # extractor / formatter / summarizer personas
     ├── tasks.py            # build_extract_description + factory functions
@@ -351,6 +357,7 @@ pytest -ra tests/
 | `test_vision.py` | `make_vision_llm` endpoint wiring |
 | `test_runner.py` | `run_pipeline` happy-path + extract-then-format |
 | `test_reformat.py` | `--reformat` short-circuit + fallback paths |
+| `test_post_stream.py` | `StreamingStitcher` heuristic (paragraph/list/table), finalize semantics, smart CJK/Latin join |
 | `test_misc_coverage.py` | misc seams |
 
 ## License

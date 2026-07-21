@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Cross-page stitching post-processor (`pdf2md_agent.post_stream`) that merges paragraphs, list items, and table rows split across page boundaries, and drops the `\n\n---\n\n` page separator by default. Opt out with `--stitch-mode off` to restore the legacy separator. Default mode is heuristic (no extra LLM calls).
+
 ### Changed
 - Generalised project description for public distribution (LLM-agnostic: defaults to MiniMax-M3 but any OpenAI-compatible vision endpoint works via `OPENAI_BASE_URL`).
 - Internal design documents removed from version control.

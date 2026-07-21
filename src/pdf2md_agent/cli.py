@@ -30,6 +30,7 @@ from pdf2md_agent.crew.runner import run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec, resolve_pages
 from pdf2md_agent.pdf_renderer import render_pdf
+from pdf2md_agent.post_stream import StitchMode, stitch_pages
 from pdf2md_agent.vision import make_vision_llm
 
 log = logging.getLogger("pdf2md-agent")
@@ -201,6 +202,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Model context-window token limit the runner budgets against. "
             "Used only when PDF2MD_AGENT_CTX_LIMIT is wrong. Default: 2013."
+        ),
+    )
+    parser.add_argument(
+        "--stitch-mode",
+        choices=[m.value for m in StitchMode],
+        default=StitchMode.HEURISTIC.value,
+        help=(
+            "How to join per-page Markdown into the final document. "
+            "'heuristic' (default) merges paragraphs/list items/table rows "
+            "split across page boundaries and drops the '---' page separator. "
+            "'off' preserves the legacy '\\n\\n---\\n\\n' separator verbatim."
         ),
     )
     return parser
@@ -451,7 +463,13 @@ def _run_pipeline(
         reformat=reformat,
     )
 
-    markdown = "\n\n---\n\n".join(r.markdown for r in results)
+    stitch_mode = StitchMode(args.stitch_mode)
+    if stitch_mode is StitchMode.HEURISTIC:
+        markdown = stitch_pages(results)
+        log.info("  stitch:          heuristic (cross-page merged)")
+    else:
+        markdown = stitch_pages(results, mode=stitch_mode)
+        log.info("  stitch:          off (legacy '---' separator preserved)")
     _atomic_write_text(args.output, markdown)
     elapsed = time.monotonic() - started
     log.info(
