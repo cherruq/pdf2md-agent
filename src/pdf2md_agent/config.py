@@ -50,6 +50,24 @@ OPENAI_BASE_URL: Final[str] = _env("OPENAI_BASE_URL", "https://api.minimaxi.com/
 MODEL_NAME: Final[str] = _env("PDF2MD_AGENT_MODEL", "MiniMax-M3")
 
 
+def _env_positive_float(name: str, default: float) -> float:
+    raw = _env(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0, got {value!r}")
+    return value
+
+
+REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
+    "PDF2MD_AGENT_REQUEST_TIMEOUT", 60.0
+)
+
+
 # --- Token-budget / image-downscale knobs -----------------------------------
 # MiniMax-M3 rejects payloads over ~2013 tokens; the 0.85 safety margin
 # keeps us off the cliff edge while a paginate is in flight.

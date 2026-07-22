@@ -34,6 +34,7 @@ from PIL import Image
 from pdf2md_agent import cli
 from pdf2md_agent.cache import CacheLayout
 from pdf2md_agent.cli import _resolve_layout
+from pdf2md_agent.crew import agents
 from pdf2md_agent.crew.multimodal_patch import (
     _encode_local_image,
     _to_data_url,
@@ -141,12 +142,17 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         dpi=144,
         pages=None,
         no_intermediates=False,
-        reformat=False,
         intermediates_dir=None,
-        resume=False,
         no_summary=False,
         no_text_hint=False,
         no_fallback_to_text=False,
+        no_cache_render=False,
+        no_cache_text=False,
+        no_cache_resized=False,
+        no_cache_extract=False,
+        no_cache_format=False,
+        no_cache_summary=False,
+        no_cache_all=False,
         max_retries=None,
         retry_initial_delay=None,
         retry_backoff=None,
@@ -157,6 +163,9 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         max_summary_chars=None,
         ctx_limit=None,
         stitch_mode="heuristic",
+        request_timeout=None,
+        model=agents.PERSONA_VERSION,
+        persona_version=agents.PERSONA_VERSION,
     )
 
 
@@ -164,11 +173,17 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """End-to-end: synthesize PDF, mock LLM + render + crew + stitch, verify output."""
+    monkeypatch.chdir(tmp_path)
     pdf = _make_onepage_pdf(tmp_path / "in.pdf")
     args = _build_minimal_args(tmp_path, pdf)
 
+    from PIL import Image
+    pages_dir = tmp_path / ".pdf2md-agent-cache" / "in" / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    png_path = pages_dir / "page_0001.png"
+    Image.new("RGB", (72, 72), "white").save(png_path, "PNG")
     page = PageImage(
-        page_number=1, width=72, height=72, image_path=tmp_path / "page_0001.png",
+        page_number=1, width=72, height=72, image_path=png_path,
     )
 
     with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
@@ -183,18 +198,19 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     assert rc == 0
     out = args.output
     assert out.read_text(encoding="utf-8") == "# Title\n\n- item\n"
-    # meta.json was emitted (intermediates kept by default)
     assert mock_write_meta.called
-    # every stage got called exactly once
-    assert mock_render.call_count == 1
     assert mock_run.call_count == 1
     assert mock_stitch.call_count == 1
+    assert mock_render.call_count == 0, (
+        "trust-cache path must not re-render when PNG already on disk"
+    )
 
 
 def test_cmd_convert_no_intermediates_does_not_emit_meta(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--no-intermediates`` short-circuits meta.json emission (tempdir-only cache)."""
+    monkeypatch.chdir(tmp_path)
     pdf = _make_onepage_pdf(tmp_path / "in.pdf")
     args = _build_minimal_args(tmp_path, pdf)
     args.no_intermediates = True
@@ -228,19 +244,12 @@ def test_cmd_convert_missing_pdf_returns_1(
     assert "input PDF not found" in err
 
 
-def test_cmd_convert_reformat_with_no_intermediates_rejected(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """``--reformat`` requires ``--intermediates``; the CLI rejects the combo early."""
-    pdf = _make_onepage_pdf(tmp_path / "in.pdf")
-    args = _build_minimal_args(tmp_path, pdf)
-    args.reformat = True
-    args.no_intermediates = True
-
-    rc = cli.cmd_convert(args)
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "--reformat requires --intermediates" in err
+def test_cmd_convert_rejects_reformat_with_no_intermediates_rejected(tmp_path: Path) -> None:
+    """Legacy --reformat removed: parser must reject the flag with a clear
+    error so users see the new --no-cache-* family."""
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--reformat"])
 
 
 # ===========================================================================
@@ -270,6 +279,10 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
          patch.object(cli, "stitch_pages", return_value="stitched body") as mock_stitch, \
          patch.object(cli, "_atomic_write_text") as mock_atomic, \
          patch.object(cli, "write_meta"):
+        layout.pages_dir.mkdir(parents=True, exist_ok=True)
+        from PIL import Image as _PIL
+        _PIL.new("RGB", (72, 72), "white").save(layout.pages_dir / "page_0001.png", "PNG")
+        from pdf2md_agent.cache import CacheNoCacheFlags
         rc = cli._run_pipeline(
             args=args,
             layout=layout,
@@ -282,16 +295,14 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
             ).RetryConfig(),
             fallback_to_text=True,
             started=__import__("time").monotonic(),
+            no_cache=CacheNoCacheFlags(),
         )
 
     assert rc == 0
     assert mock_atomic.call_count == 1
-    # The atomic write must have been called with the stitched markdown and the
-    # user-supplied output path — never a Path.write_text() shortcut.
     written_path, written_text = mock_atomic.call_args.args
     assert written_path == out_path
     assert written_text == "stitched body"
-    assert mock_render.called
     assert mock_stitch.called
 
 
@@ -369,9 +380,9 @@ def test_record_text_layer_fallback_writes_extract_and_format(tmp_path: Path) ->
     assert result.page_number == 1
     assert result.summary == "prior summary"
     assert "vision model unavailable" in result.markdown
-    # extract.txt is the canonical "this page was attempted but vision failed" marker.
-    assert artifacts.extract_text.read_text(encoding="utf-8") == ""
-    # format.md carries the recoverable fallback content.
+    extract_text = artifacts.extract_text.read_text(encoding="utf-8")
+    assert "vision model unavailable" in extract_text
+    assert "page 1" in extract_text
     assert "raw pdf text" in artifacts.format_markdown.read_text(encoding="utf-8")
 
 
@@ -586,3 +597,59 @@ def test_to_sentinel_returns_action_or_fallback_for_remote_url() -> None:
     sentinel = _to_sentinel("https://example.test/x.png", action=None)
     assert "could not inline image" in sentinel
     assert "https://example.test/x.png" in sentinel
+
+
+def test_call_with_retry_treats_timeout_as_transient(caplog) -> None:
+    """A wall-clock timeout guard surfaces as a transient ``APITimeoutError``
+    so the existing retry path re-issues the call instead of giving up."""
+    import time as _time
+    from openai import APITimeoutError
+    from pdf2md_agent.llm_retry import RetryConfig, call_with_retry
+
+    caplog.set_level("WARNING", logger="pdf2md_agent.llm_retry")
+
+    def _slow_fn() -> None:
+        _time.sleep(0.2)
+
+    with pytest.raises(APITimeoutError):
+        call_with_retry(
+            _slow_fn,
+            config=RetryConfig(
+                max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+            ),
+            timeout_seconds=0.05,
+            sleep=lambda _w: None,
+        )
+    assert any("timed out" in rec.message for rec in caplog.records)
+
+
+def test_call_with_retry_timeout_actually_bounds_wall_clock() -> None:
+    """The wall-clock timeout must bound the caller's wait, not just raise
+    on the eventual return. Regression: the previous
+    ``with ThreadPoolExecutor(...)`` implementation blocked on
+    ``shutdown(wait=True)`` after the timeout fired, so the caller waited
+    the full duration of the hung call (``time.sleep(2.0)``) instead of
+    the configured 0.2s.
+    """
+    import time as _time
+    from openai import APITimeoutError
+    from pdf2md_agent.llm_retry import RetryConfig, call_with_retry
+
+    def _hung_fn() -> None:
+        _time.sleep(2.0)
+
+    start = _time.monotonic()
+    with pytest.raises(APITimeoutError):
+        call_with_retry(
+            _hung_fn,
+            config=RetryConfig(
+                max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+            ),
+            timeout_seconds=0.2,
+            sleep=lambda _w: None,
+        )
+    elapsed = _time.monotonic() - start
+    assert elapsed < 1.0, (
+        f"timeout-guard did not bound the caller: elapsed={elapsed:.3f}s "
+        f"(should be <1.0s for timeout_seconds=0.2s)"
+    )

@@ -8,14 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Cross-page stitching post-processor (`pdf2md_agent.post_stream`) that merges paragraphs, list items, and table rows split across page boundaries, and drops the `\n\n---\n\n` page separator by default. Opt out with `--stitch-mode off` to restore the legacy separator. Default mode is heuristic (no extra LLM calls).
-- Hierarchical `AGENTS.md` knowledge base at the repository root and under `src/pdf2md_agent/` (subpackage + `crew/` sub-subpackage) — non-generic, project-specific: conventions, anti-patterns, code map.
-- `.env.example` now documents all 14 `PDF2MD_AGENT_*` knobs (was: only `OPENAI_BASE_URL` + `OPENAI_API_KEY`).
+- `--no-cache-all` plus the per-resource `--no-cache-{render,text,resized,extract,format,summary}` flag family. Default semantics flipped: cache is trusted unless explicitly opted out. The single `CacheNoCacheFlags` dataclass (`src/pdf2md_agent/cache.py:CacheNoCacheFlags`) is the typed contract between CLI and runner.
+- `--request-timeout` CLI flag + `REQUEST_TIMEOUT_SECONDS` config (default 60s). Both the OpenAI SDK call and the runner's per-attempt guard share the value; a wall-clock overrun reclassifies the attempt as transient so the retry loop re-issues.
+- `--version` / `-V` flag that prints the package version (`pdf2md_agent.__about__.__version__`) and exits 0.
+- Meta fingerprint validation: `meta.json` now records `model` and `persona_version` (16-char SHA-256 of the active persona strings). The runner refuses to re-use cached outputs when the fingerprint drifts.
+- Render-side cache reuse: `pdf2md_agent.render_skip` exposes `maybe_skip_render` / `maybe_skip_text` / `maybe_skip_resized`; the CLI consults them before calling `render_pdf`, so a follow-up run with the same `--dpi` skips the PyMuPDF re-render.
+- H1 sentinel: when a page falls back to the text layer, `extract.txt` is now written with a non-empty sentinel line (`(vision model unavailable for page N; ...)`) so `has_cached_extract` and downstream consumers can detect "this page has no real extractor output" instead of silently treating the empty file as success.
+- L7 fix: `--no-summary` now deletes `summary.json` at the start of the run so the running summary does not survive across `--no-summary` invocations.
+- Cache root: `_cache_key_for_pdf` derives a deterministic, 16-char SHA-256 digest of the absolute PDF path for stems that are too long, contain path separators, or collide with Windows reserved names.
+- `--help` argument groups: "Pipeline", "Cache control", "Feature disable", "Retry & tuning", "Diagnostic" — unified naming across the four flag families (`--no-cache-*` for cache resources, `--no-*` for optional features).
+- Run-completion log line: when any pages used the text-layer fallback, the runner logs `run complete: N pages, M used fallback (text layer): [pages...]`.
+- Numeric CLI validation: `--max-retries`, `--image-quality`, `--image-long-side`, `--max-summary-chars`, `--ctx-limit`, `--request-timeout` now reject out-of-range or non-numeric values at the parser.
 
 ### Changed
-- Generalised project description for public distribution (LLM-agnostic: defaults to MiniMax-M3 but any OpenAI-compatible vision endpoint works via `OPENAI_BASE_URL`).
-- Internal design documents removed from version control.
-- Quality refactor: empty-PDF / over-large page-range guards; sanitised output path for Windows reserved names / symlinks / path-traversal; `.env.example` documentation gap closed; `RetryConfig` + `_Fragment` dataclasses now `slots=True`; `post_stream` regex hoisted to module level; double `Path.stat()` in `token_budget` reduced to single call; task factory return types annotated; TypeVar in `llm_retry` no longer shadows builtin `type`; `_output()` parameter renamed; `_no_fallback_to_text` argparse flag normalised to `store_true`; atomic-write helper extracted and re-used in `cache.py`; corrected log levels (transient retries → `info`, graceful fallback → `warning`); empty/corrupt image and corrupt summary handled gracefully instead of silently swallowed; `APIStatusError` logged without leaking response body; `runner._strip_think` regex hoisted; per-page `mkdir` deduplicated.
+- Pipeline description in `--help`: explicitly lists the five stages (render → extract → format → summarize → stitch) and the cache fingerprint fields.
+- Internal `run_pipeline` signature: `resume: bool` and `reformat: bool = False` removed; the single `no_cache: CacheNoCacheFlags` parameter drives the per-page priority chain (format short-circuit → extract short-circuit → full pipeline).
+
+### Breaking
+- `--resume` removed. Use `--no-cache-all` (or selectively `--no-cache-format`) to force a re-run.
+- `--reformat` removed. The layout-aware formatter persona was deleted; the only formatter persona is the strict CommonMark one.
+- Pre-`0.3.0` `meta.json` (4 fields) will fail fingerprint validation under any cache reuse. Wipe `.pdf2md-agent-cache/<stem>/` (or use `--no-cache-all` once) after upgrading.
+- `FORMATTER_PERSONA_REFORMAT` and the `reformat` parameter on `make_formatter` / `make_format_task` are gone. Cache files written under the old `--reformat` mode are no longer trusted by the new extract-short-circuit (the new path re-runs the strict formatter on whatever extract.txt is on disk).
 
 ## [0.2.0] — 2026-07-17
 

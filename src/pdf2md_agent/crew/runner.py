@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from pdf2md_agent.cache import (
     CacheLayout,
+    CacheNoCacheFlags,
     PageArtifacts,
     has_cached_extract,
     is_page_complete,
@@ -33,7 +34,13 @@ from pdf2md_agent.config import (
     MODEL_NAME,
     TOKEN_BUDGET_SAFETY,
 )
-from pdf2md_agent.crew.agents import EXTRACTOR_BACKSTORY, make_extractor, make_formatter, make_summarizer
+from pdf2md_agent.crew.agents import (
+    EXTRACTOR_BACKSTORY,
+    PERSONA_VERSION,
+    make_extractor,
+    make_formatter,
+    make_summarizer,
+)
 from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
 from pdf2md_agent.crew.tasks import (
     _truncate_summary,
@@ -134,7 +141,10 @@ def _record_text_layer_fallback(
     completion_label: str,
 ) -> PageResult:
     format_md = _text_layer_fallback(artifacts)
-    artifacts.extract_text.write_text("", encoding="utf-8")
+    artifacts.extract_text.write_text(
+        _FALLBACK_SENTINEL.format(page=page_number),
+        encoding="utf-8",
+    )
     artifacts.format_markdown.write_text(format_md, encoding="utf-8")
     elapsed = time.monotonic() - page_started
     log.info(
@@ -147,6 +157,12 @@ def _record_text_layer_fallback(
         f"{len(format_md):,}",
     )
     return PageResult(page_number, format_md, summary)
+
+
+_FALLBACK_SENTINEL: str = (
+    "(vision model unavailable for page {page}; text-layer fallback emitted; "
+    "treat as sentinel — no extractor payload available)\n"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +179,7 @@ def run_pipeline(
     pages: list[PageImage],
     layout: CacheLayout,
     with_summary: bool,
-    resume: bool,
+    no_cache: CacheNoCacheFlags,
     text_hint: bool,
     llm: LLM,
     retry_config: RetryConfig | None = None,
@@ -174,8 +190,8 @@ def run_pipeline(
     image_jpeg_quality: int = IMAGE_JPEG_QUALITY,
     max_summary_chars: int = MAX_SUMMARY_CHARS,
     token_budget_safety: float = TOKEN_BUDGET_SAFETY,
-    reformat: bool = False,
     dpi: int = 144,
+    request_timeout_seconds: float | None = None,
 ) -> list[PageResult]:
     """Run the per-page CrewAI pipeline across ``pages`` and return page results.
 
@@ -187,52 +203,46 @@ def run_pipeline(
     the page is rendered as a fenced text-layer markdown stub so the rest of
     the pipeline keeps moving; otherwise the exception propagates.
 
-    ``reformat`` enables ``--reformat`` mode: for every page that already has
-    a cached ``extract.txt``, the extractor agent is skipped and the existing
-    text is run through the layout-aware formatter (+ summarizer). Pages
-    whose ``extract.txt`` is missing fall through to the standard pipeline
-    (graceful degradation). The two short-circuits per page, in priority
-    order, are: resume → reformat → full pipeline.
+    ``no_cache`` is the per-resource opt-out switch (see
+    :class:`pdf2md_agent.cache.CacheNoCacheFlags`). Every flag defaults to
+    ``False`` (trust cache). Setting ``no_cache.format`` short-circuits the
+    entire per-page pipeline when ``format.md`` exists. Setting
+    ``no_cache.extract`` (but not ``no_cache.format``) re-runs only the
+    formatter (+ summarizer) using the cached ``extract.txt``; pages whose
+    extract is missing fall through to the full pipeline.
 
     The remaining keyword arguments are the token-budget knobs (see
     :mod:`pdf2md_agent.config`). All have sensible defaults.
     """
-    # Lazy-init extractor + formatter + summarizer. In --reformat mode
-    # the cache short-circuit handles each page inside
-    # _run_format_summarize_only, which builds its own agents per-page;
-    # the standard pipeline path lazy-inits anything it needs on demand
-    # below. Building them up front would do work for agents that get
-    # thrown away when --reformat short-circuits the page.
-    extractor = None
-    formatter = None
-    summarizer = None
-    if not reformat:
-        formatter = make_formatter(llm)
-        if with_summary:
-            summarizer = make_summarizer(llm)
+    extractor: Agent | None = None
+    formatter = make_formatter(llm)
+    summarizer: Agent | None = None
+    if with_summary:
+        summarizer = make_summarizer(llm)
 
     patch_add_image_tool(
         target_long_side=image_long_side,
         jpeg_quality=image_jpeg_quality,
     )
 
-    summary = read_summary(layout.summary_path)
+    summary = ""
+    if not no_cache.summary:
+        summary = read_summary(layout.summary_path)
     results: list[PageResult] = []
     pipeline_started = time.monotonic()
     total = len(pages)
+    fallback_pages: list[int] = []
     log.info(
-        "pipeline started: pages=%d, dpi=%d, model=%s, with_summary=%s, "
-        "resume=%s, reformat=%s",
+        "pipeline started: pages=%d, dpi=%d, model=%s, persona=%s, "
+        "with_summary=%s, no_cache=%s",
         total,
         dpi,
         MODEL_NAME,
+        PERSONA_VERSION,
         with_summary,
-        resume,
-        reformat,
+        no_cache.as_dict(),
     )
     phases = "extract + format + summarize" if with_summary else "extract + format"
-    # Fast-path aliases for the layout's hot ``Path`` attributes so the
-    # per-page loop avoids a repeated attribute lookup on ``layout``.
     pages_dir = layout.pages_dir
     summary_path = layout.summary_path
 
@@ -241,22 +251,20 @@ def run_pipeline(
     for idx, page in enumerate(pages, start=1):
         artifacts = layout.artifacts_for(page)
 
-        if resume and is_page_complete(layout, page.page_number):
+        if not no_cache.format and is_page_complete(layout, page.page_number):
             cached_md = artifacts.format_markdown.read_text(encoding="utf-8").strip()
-            if with_summary:
-                summary = read_summary(layout.summary_path)
             log.info("  [%d/%d] page %d: cached, skipping", idx, total, page.page_number)
             results.append(PageResult(page.page_number, cached_md, summary))
             continue
 
-        # --reformat short-circuit. If extract.txt is on disk, skip the
-        # extractor and run layout-aware formatter (+ summarizer) using
-        # the cached text. Falls through to the full pipeline below if
-        # extract.txt is missing (graceful degradation; logged).
-        if reformat and has_cached_extract(layout, page.page_number):
+        if (
+            no_cache.extract
+            and not no_cache.format
+            and has_cached_extract(layout, page.page_number)
+        ):
             page_started = time.monotonic()
             log.info(
-                "  [%d/%d] page %d: --reformat (cached extract, no image)",
+                "  [%d/%d] page %d: no-cache-extract (cached extract, no image)",
                 idx,
                 total,
                 page.page_number,
@@ -274,21 +282,17 @@ def run_pipeline(
             )
             elapsed = time.monotonic() - page_started
             log.info(
-                "  [%d/%d] page %d: reformat done in %.1fs%s",
+                "  [%d/%d] page %d: no-cache-extract done in %.1fs%s",
                 idx,
                 total,
                 page.page_number,
                 elapsed,
                 " (fallback)" if did_fallback else "",
             )
-            # Write format.md here too so that test/test seams patching
-            # _run_format_summarize_only still see the cache updated.
-            # When the real helper runs, this is a redundant same-value
-            # write over the helper's own disk write.
             artifacts.format_markdown.write_text(fmt_out, encoding="utf-8")
             results.append(PageResult(page.page_number, fmt_out, summary))
             continue
-        if reformat:
+        if no_cache.extract and not has_cached_extract(layout, page.page_number):
             log.warning(
                 "  [%d/%d] page %d: extract.txt missing, "
                 "falling back to full extract+format",
@@ -296,13 +300,7 @@ def run_pipeline(
                 total,
                 page.page_number,
             )
-            # falls through to the standard pipeline below
 
-        # Lazy-init extractor/formatter/summarizer only when the standard
-        # pipeline path actually runs. --reformat + cached extract
-        # short-circuited above, so these agents stay unbuilt in that
-        # case. On a reformat→full-pipeline fallback (extract.txt
-        # missing) we construct them here, just in time.
         if extractor is None:
             extractor = make_extractor(llm)
         if formatter is None:
@@ -394,6 +392,7 @@ def run_pipeline(
                 crew.kickoff,
                 config=retry_config or RetryConfig(),
                 label=f"page {page.page_number}",
+                timeout_seconds=request_timeout_seconds,
             )
         except ValidationError as exc:
             if not fallback_to_text:
@@ -416,6 +415,7 @@ def run_pipeline(
                 summary=summary,
                 completion_label="validation-fallback",
             ))
+            fallback_pages.append(page.page_number)
             continue
         except BaseException as exc:
             if not fallback_to_text or not is_transient(exc):
@@ -437,6 +437,7 @@ def run_pipeline(
                 summary=summary,
                 completion_label="fallback",
             ))
+            fallback_pages.append(page.page_number)
             continue
 
         extract_text = _output(extract_t)
@@ -444,7 +445,7 @@ def run_pipeline(
         artifacts.extract_text.write_text(extract_text, encoding="utf-8")
         artifacts.format_markdown.write_text(format_md, encoding="utf-8")
 
-        if summarize_t is not None:
+        if summarize_t is not None and not no_cache.summary and with_summary:
             summary = _output(summarize_t)
             if len(summary) > max_summary_chars:
                 summary = _truncate_summary(summary, max_summary_chars)
@@ -468,6 +469,13 @@ def run_pipeline(
         total_elapsed,
         total_elapsed / max(total, 1),
     )
+    if fallback_pages:
+        log.info(
+            "run complete: %d pages, %d used fallback (text layer): %s",
+            total,
+            len(fallback_pages),
+            fallback_pages,
+        )
     return results
 
 
@@ -482,11 +490,15 @@ def _run_format_summarize_only(
     retry_config: RetryConfig,
     fallback_to_text: bool,
     max_summary_chars: int,
+    request_timeout_seconds: float | None = None,
 ) -> tuple[str, str, bool]:
     """Run formatter + (optional) summarizer without the extractor.
 
-    Used by --reformat. The format task's description inlines the on-disk
-    extract.txt content as a fenced block, matching the text-hint seam.
+    Used by the ``--no-cache-extract`` short-circuit: when the runner
+    trusts the cached ``extract.txt`` but needs a fresh formatter pass
+    (e.g. a resume-after-failure retry). The format task's description
+    inlines the on-disk extract.txt content as a fenced block, matching
+    the text-hint seam.
 
     On retry exhaustion with ``fallback_to_text=True``, the cached
     ``extract.txt`` is written through unchanged as the new ``format.md``
@@ -496,7 +508,7 @@ def _run_format_summarize_only(
 
     Returns ``(format_md, summary_out, did_fallback)``.
     """
-    formatter = make_formatter(llm, reformat=True)
+    formatter = make_formatter(llm)
     format_t = make_format_task_from_extract_file(formatter, artifacts.extract_text)
 
     if not with_summary:
@@ -525,7 +537,8 @@ def _run_format_summarize_only(
         call_with_retry(
             crew.kickoff,
             config=retry_config,
-            label=f"reformat page {page_number}",
+            label=f"no-cache-extract page {page_number}",
+            timeout_seconds=request_timeout_seconds,
         )
         format_md = _output(format_t)
         summary_out = _output(summarize_t) if summarize_t is not None else summary_in
@@ -533,7 +546,7 @@ def _run_format_summarize_only(
         if not fallback_to_text:
             raise
         log.warning(
-            "  page %d: reformat produced malformed output; writing extract.txt as-is",
+            "  page %d: no-cache-extract produced malformed output; writing extract.txt as-is",
             page_number,
         )
         format_md = artifacts.extract_text.read_text(encoding="utf-8")
@@ -543,7 +556,7 @@ def _run_format_summarize_only(
         if not fallback_to_text or not is_transient(exc):
             raise
         log.warning(
-            "  page %d: reformat failed after retries (%s); writing extract.txt as-is",
+            "  page %d: no-cache-extract failed after retries (%s); writing extract.txt as-is",
             page_number,
             _safe_exc_summary(exc),
         )

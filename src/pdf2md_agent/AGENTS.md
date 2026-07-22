@@ -23,12 +23,12 @@ Single flat package (no sub-packages except `crew/`). Concerns split by file, no
 ```
 cli.main
   └─ cmd_convert(args)
-       ├─ CacheLayout  (--no-intermediates → tempdir; else .pdf2md-agent-cache/<stem>/)
-       ├─ _atomic_write_text(out, md)         ← cli.py:249  (sibling-tempfile + os.replace)
+       ├─ CacheLayout  (--no-intermediates → tempdir; else .pdf2md-agent-cache/<key>/)
+       ├─ _atomic_write_text(out, md)         ← cli.py:252  (sibling-tempfile + os.replace)
        └─ _run_pipeline
-            ├─ render_pdf(...)                ← list[PageImage]
-            ├─ make_vision_llm(...)
-            └─ crew.runner.run_pipeline(...)  ← per page (resume → reformat → full)
+            ├─ _render_pages  (trust-cache fast path → render_pdf only on cache miss)
+            ├─ make_vision_llm(...)            (timeout=REQUEST_TIMEOUT_SECONDS)
+            └─ crew.runner.run_pipeline(...)  ← per page (format → extract → full)
                  └─ post_stream.stitch_pages(...)
 ```
 

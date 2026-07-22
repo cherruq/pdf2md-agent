@@ -10,7 +10,15 @@ import time
 import pymupdf
 from pathlib import Path
 
-from pdf2md_agent.cache import CacheLayout, atomic_write_text, write_meta
+from pdf2md_agent import __about__
+from pdf2md_agent.cache import (
+    CacheLayout,
+    CacheNoCacheFlags,
+    atomic_write_text,
+    check_meta_matches,
+    read_meta,
+    write_meta,
+)
 from pdf2md_agent.config import (
     CTX_LIMIT,
     FALLBACK_TO_TEXT,
@@ -18,6 +26,8 @@ from pdf2md_agent.config import (
     IMAGE_LONG_SIDE,
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
+    MODEL_NAME,
+    REQUEST_TIMEOUT_SECONDS,
     RETRY_BACKOFF,
     RETRY_INITIAL_DELAY,
     RETRY_JITTER,
@@ -25,14 +35,93 @@ from pdf2md_agent.config import (
     RETRY_MAX_DELAY,
     TOKEN_BUDGET_SAFETY,
 )
+from pdf2md_agent.crew.agents import PERSONA_VERSION
 from pdf2md_agent.crew.runner import run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec, resolve_pages
-from pdf2md_agent.pdf_renderer import render_pdf
+from PIL import Image
+
+from pdf2md_agent.pdf_renderer import PageImage, render_pdf
 from pdf2md_agent.post_stream import StitchMode, stitch_pages
+from pdf2md_agent.render_skip import (
+    maybe_skip_render as _maybe_skip_render,
+)
 from pdf2md_agent.vision import make_vision_llm
 
 log = logging.getLogger("pdf2md-agent")
+
+
+class _VersionAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None,
+    ) -> None:
+        print(f"pdf2md-agent {__about__.__version__}")
+        parser.exit(0)
+
+
+def _request_timeout_type(raw: str) -> float:
+    """argparse ``type=`` for ``--request-timeout`` (0.1s–600s)."""
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--request-timeout must be a number, got {raw!r}"
+        ) from exc
+    if not 0.1 <= value <= 600.0:
+        raise argparse.ArgumentTypeError(
+            f"--request-timeout must be in [0.1, 600], got {value}"
+        )
+    return value
+
+
+def _positive_int_type(name: str, minimum: int) -> Callable[[str], int]:
+    def _parser(raw: str) -> int:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"--{name} must be an integer, got {raw!r}"
+            ) from exc
+        if value < minimum:
+            raise argparse.ArgumentTypeError(
+                f"--{name} must be >= {minimum}, got {value}"
+            )
+        return value
+
+    return _parser
+
+
+_NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
+    "render",
+    "text",
+    "resized",
+    "extract",
+    "format",
+    "summary",
+)
+
+
+class _NoCacheAllAction(argparse.Action):
+    """Sets every ``--no-cache-*`` flag to True when ``--no-cache-all`` is set.
+
+    Implemented as a custom ``Action`` so post-parse resolution happens
+    automatically regardless of argument order on the command line.
+    """
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None,
+    ) -> None:
+        for name in _NO_CACHE_FLAG_NAMES:
+            setattr(namespace, f"no_cache_{name}", True)
+        setattr(namespace, "no_cache_all", True)
 
 
 def _safe_intermediates_dir(value: str) -> Path:
@@ -89,14 +178,56 @@ def _safe_cache_stem(stem: str) -> str:
     return candidate
 
 
+def _cache_key_for_pdf(pdf: Path) -> str:
+    """Return a deterministic cache directory name for ``pdf``.
+
+    Uses the PDF's stem when it is short, free of path separators, and not
+    a Windows-reserved name. For long stems, names that contain ``/`` (e.g.
+    when the PDF lives under a deeply-nested tree), or Windows-reserved
+    stems on a Windows host, the cache key is a 16-character SHA-256
+    digest of the absolute PDF path — deterministic per file, never
+    collides between different absolute paths.
+    """
+    abs_path = pdf.resolve()
+    stem = _safe_cache_stem(abs_path.stem)
+    if (
+        0 < len(stem) <= 60
+        and "/" not in abs_path.stem
+        and "\\" not in abs_path.stem
+        and (sys.platform != "win32" or stem.upper() not in _WINDOWS_RESERVED_NAMES)
+    ):
+        return stem
+    import hashlib
+    return hashlib.sha256(str(abs_path).encode("utf-8")).hexdigest()[:16]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pdf2md-agent",
-        description="Convert a PDF to markdown via a CrewAI vision pipeline (MiniMax-M3).",
+        description=(
+            "Render every page of a PDF to an image and feed it through a "
+            "CrewAI pipeline (extract → format → summarize) to produce "
+            "language-preserving Markdown.\n\n"
+            "Stages: render → extract → format → summarize → stitch.\n\n"
+            "Cache: per-resource (render/text/resized/extract/format/summary) "
+            "is reused by default and gated by meta.json fingerprint validation "
+            "(pdf_path, dpi, with_summary, pages, model, persona_version). "
+            "Any drift → fail loud.\n\n"
+            "--no-cache-<resource> opts out a specific resource from cache reuse. "
+            "--no-cache-all disables all cache reuse. --no-<feature> disables an "
+            "optional feature.\n\n"
+            "See CONTRIBUTING.md for naming conventions."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("pdf", type=Path, help="Input PDF path.")
-    parser.add_argument("-o", "--output", type=Path, required=True, help="Output markdown path.")
-    parser.add_argument(
+
+    pipeline = parser.add_argument_group(
+        "Pipeline",
+        "Inputs that drive the per-page pipeline.",
+    )
+    pipeline.add_argument("pdf", type=Path, help="Input PDF path.")
+    pipeline.add_argument("-o", "--output", type=Path, required=True, help="Output markdown path.")
+    pipeline.add_argument(
         "--dpi",
         type=int,
         default=144,
@@ -108,7 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
             "300+ (print, usually overkill for vision models)."
         ),
     )
-    parser.add_argument(
+    pipeline.add_argument(
         "-p", "--pages",
         type=parse_page_spec,
         default=None,
@@ -120,88 +251,59 @@ def build_parser() -> argparse.ArgumentParser:
             "Default: all pages."
         ),
     )
-    parser.add_argument(
+
+    cache = parser.add_argument_group(
+        "Cache control",
+        "Defaults trust cached resources. Each --no-cache-* opts a single "
+        "resource out; --no-cache-all opts every resource out.",
+    )
+    cache.add_argument(
         "--no-intermediates",
         action="store_true",
-        help="Skip writing intermediate cache files.",
+        help="Skip writing intermediate cache files (uses a tempdir).",
     )
-    parser.add_argument(
-        "--reformat",
-        action="store_true",
-        help=(
-            "Re-run the formatter (and summarizer) on cached extract.txt; "
-            "skips the extractor. The formatter uses a layout-aware persona "
-            "that drops page headers, footers, and page numbers. Requires "
-            "--intermediates (incompatible with --no-intermediates)."
-        ),
-    )
-    parser.add_argument(
+    cache.add_argument(
         "--intermediates-dir",
         type=_safe_intermediates_dir,
         default=None,
         help="Override the intermediates cache directory (default: .pdf2md-agent-cache/<pdf_stem>/).",
     )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Reuse cached per-page outputs when present; only re-run missing pages.",
+    for name in _NO_CACHE_FLAG_NAMES:
+        cache.add_argument(
+            f"--no-cache-{name}",
+            action="store_true",
+            default=False,
+            dest=f"no_cache_{name}",
+            help=argparse.SUPPRESS,
+        )
+    cache.add_argument(
+        "--no-cache-all",
+        action=_NoCacheAllAction,
+        nargs=0,
+        default=False,
+        dest="no_cache_all",
+        help=(
+            "Disable every cache reuse (render/text/resized/extract/"
+            "format/summary). Equivalent to passing all six --no-cache-* "
+            "flags."
+        ),
     )
-    parser.add_argument(
+
+    features = parser.add_argument_group(
+        "Feature disable",
+        "Optional features; each --no-<feature> opts a single feature out.",
+    )
+    features.add_argument(
         "--no-summary",
         action="store_true",
         help="Disable cross-page running summary (process each page independently).",
     )
-    parser.add_argument(
+    features.add_argument(
         "--no-text-hint",
         action="store_true",
         help="Disable feeding the PDF's native text layer to the extractor.",
     )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=None,
-        help=(
-            "Total LLM call attempts per page (initial + retries). Overrides "
-            "PDF2MD_AGENT_MAX_RETRIES. Default: 4."
-        ),
-    )
-    parser.add_argument(
-        "--retry-initial-delay",
-        type=float,
-        default=None,
-        help=(
-            "Initial retry delay in seconds (exponential backoff). Overrides "
-            "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
-        ),
-    )
-    parser.add_argument(
-        "--retry-backoff",
-        type=float,
-        default=None,
-        help=(
-            "Exponential backoff multiplier between retries. Overrides "
-            "PDF2MD_AGENT_RETRY_BACKOFF. Default: 2.0."
-        ),
-    )
-    parser.add_argument(
-        "--retry-max-delay",
-        type=float,
-        default=None,
-        help=(
-            "Per-attempt retry delay cap in seconds. Overrides "
-            "PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 30.0."
-        ),
-    )
-    parser.add_argument(
-        "--retry-jitter",
-        type=float,
-        default=None,
-        help=(
-            "Jitter ratio in [0.0, 1.0] applied to each retry delay to avoid "
-            "thundering-herd. Overrides PDF2MD_AGENT_RETRY_JITTER. Default: 0.25."
-        ),
-    )
-    parser.add_argument(
+    features.add_argument(
         "--no-fallback-to-text",
         action="store_true",
         default=False,
@@ -211,53 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
             "native text layer. Default: fallback enabled."
         ),
     )
-    parser.add_argument(
-        "--image-long-side",
-        type=int,
-        default=None,
-        metavar="PX",
-        help=(
-            "Long-side cap (pixels) for inlined page images. The runner "
-            "rescales each page PNG to this size as JPEG at the configured "
-            "quality before base64-encoding it. Lower values shrink the per-"
-            "call token cost at the expense of OCR fidelity. Overrides "
-            "PDF2MD_AGENT_IMAGE_LONG_SIDE. Default: 1536."
-        ),
-    )
-    parser.add_argument(
-        "--image-quality",
-        type=int,
-        default=None,
-        metavar="Q",
-        help=(
-            "JPEG quality (1-95) used when the runner downsamples page "
-            "images. Higher values preserve detail but enlarge the per-"
-            "call token cost. Overrides PDF2MD_AGENT_IMAGE_JPEG_QUALITY. "
-            "Default: 85."
-        ),
-    )
-    parser.add_argument(
-        "--max-summary-chars",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "Maximum running-summary size (characters) fed into the next "
-            "page's extract call and produced by the summarizer. Overrides "
-            "PDF2MD_AGENT_MAX_SUMMARY_CHARS. Default: 800."
-        ),
-    )
-    parser.add_argument(
-        "--ctx-limit",
-        type=int,
-        default=None,
-        metavar="TOK",
-        help=(
-            "Model context-window token limit the runner budgets against. "
-            "Used only when PDF2MD_AGENT_CTX_LIMIT is wrong. Default: 2013."
-        ),
-    )
-    parser.add_argument(
+    features.add_argument(
         "--stitch-mode",
         choices=[m.value for m in StitchMode],
         default=StitchMode.HEURISTIC.value,
@@ -268,7 +324,158 @@ def build_parser() -> argparse.ArgumentParser:
             "'off' preserves the legacy '\\n\\n---\\n\\n' separator verbatim."
         ),
     )
+
+    tuning = parser.add_argument_group(
+        "Retry & tuning",
+        "LLM retry budget, image downscale, and token-budget knobs.",
+    )
+    tuning.add_argument(
+        "--max-retries",
+        type=_positive_int_type("max-retries", 1),
+        default=None,
+        help=(
+            "Total LLM call attempts per page (initial + retries). Overrides "
+            "PDF2MD_AGENT_MAX_RETRIES. Default: 4."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-initial-delay",
+        type=float,
+        default=None,
+        help=(
+            "Initial retry delay in seconds (exponential backoff). Overrides "
+            "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-backoff",
+        type=float,
+        default=None,
+        help=(
+            "Exponential backoff multiplier between retries. Overrides "
+            "PDF2MD_AGENT_RETRY_BACKOFF. Default: 2.0."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-max-delay",
+        type=float,
+        default=None,
+        help=(
+            "Per-attempt retry delay cap in seconds. Overrides "
+            "PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 30.0."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-jitter",
+        type=float,
+        default=None,
+        help=(
+            "Jitter ratio in [0.0, 1.0] applied to each retry delay to avoid "
+            "thundering-herd. Overrides PDF2MD_AGENT_RETRY_JITTER. Default: 0.25."
+        ),
+    )
+    tuning.add_argument(
+        "--image-long-side",
+        type=_positive_int_type("image-long-side", 64),
+        default=None,
+        metavar="PX",
+        help=(
+            "Long-side cap (pixels) for inlined page images. The runner "
+            "rescales each page PNG to this size as JPEG at the configured "
+            "quality before base64-encoding it. Lower values shrink the per-"
+            "call token cost at the expense of OCR fidelity. Overrides "
+            "PDF2MD_AGENT_IMAGE_LONG_SIDE. Default: 1536."
+        ),
+    )
+    tuning.add_argument(
+        "--image-quality",
+        type=_positive_int_type("image-quality", 1),
+        default=None,
+        metavar="Q",
+        help=(
+            "JPEG quality (1-100) used when the runner downsamples page "
+            "images. Higher values preserve detail but enlarge the per-call "
+            "token cost. 75-95 is the practical sweet spot. Overrides "
+            "PDF2MD_AGENT_IMAGE_JPEG_QUALITY. Default: 85."
+        ),
+    )
+    tuning.add_argument(
+        "--max-summary-chars",
+        type=_positive_int_type("max-summary-chars", 100),
+        default=None,
+        metavar="N",
+        help=(
+            "Maximum running-summary size (characters) fed into the next "
+            "page's extract call and produced by the summarizer. Overrides "
+            "PDF2MD_AGENT_MAX_SUMMARY_CHARS. Default: 800."
+        ),
+    )
+    tuning.add_argument(
+        "--ctx-limit",
+        type=_positive_int_type("ctx-limit", 256),
+        default=None,
+        metavar="TOK",
+        help=(
+            "Model context-window token limit the runner budgets against. "
+            "Used only when PDF2MD_AGENT_CTX_LIMIT is wrong. Default: 2013."
+        ),
+    )
+    tuning.add_argument(
+        "--request-timeout",
+        type=_request_timeout_type,
+        default=None,
+        metavar="SEC",
+        help=(
+            "Per-attempt wall-clock timeout (seconds, 0.1-600). Overrides "
+            "PDF2MD_AGENT_REQUEST_TIMEOUT. Default: 60.0."
+        ),
+    )
+
+    diagnostic = parser.add_argument_group(
+        "Diagnostic",
+        "Inspection flags; rarely needed in normal runs.",
+    )
+    diagnostic.add_argument(
+        "--model",
+        default=MODEL_NAME,
+        help=(
+            "Model name to record in meta.json for fingerprint validation. "
+            "Defaults to PDF2MD_AGENT_MODEL (default: MiniMax-M3)."
+        ),
+    )
+    diagnostic.add_argument(
+        "--persona-version",
+        default=PERSONA_VERSION,
+        help=(
+            "Persona fingerprint (16-char hex) recorded in meta.json. The "
+            "runner refuses to re-use cache when this drifts. Defaults to "
+            "the SHA-256[:16] of the active persona strings."
+        ),
+    )
+
+    parser.add_argument(
+        "-V", "--version",
+        action=_VersionAction,
+        nargs=0,
+        help="Print the pdf2md-agent version and exit.",
+    )
     return parser
+
+
+def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
+    """Build a :class:`CacheNoCacheFlags` from CLI flags.
+
+    The ``--no-cache-all`` action already flips every per-resource flag,
+    so this is a straight attribute-to-field copy.
+    """
+    return CacheNoCacheFlags(
+        render=bool(args.no_cache_render),
+        text=bool(args.no_cache_text),
+        resized=bool(args.no_cache_resized),
+        extract=bool(args.no_cache_extract),
+        format=bool(args.no_cache_format),
+        summary=bool(args.no_cache_summary),
+    )
 
 
 def _resolve_layout(
@@ -282,7 +489,7 @@ def _resolve_layout(
     is removed on context exit.
     """
     if keep_intermediates:
-        root = override if override is not None else Path(".pdf2md-agent-cache") / _safe_cache_stem(pdf.stem)
+        root = override if override is not None else Path(".pdf2md-agent-cache") / _cache_key_for_pdf(pdf)
         return CacheLayout.for_pdf(root, pdf), root / "pages"
 
     td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
@@ -361,6 +568,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     started = time.monotonic()
     keep_intermediates = not args.no_intermediates
     with_summary = not args.no_summary
+    no_cache_flags = _resolve_no_cache_flags(args)
 
     # Resolve --pages against the PDF's actual page count so out-of-range
     # errors surface before we commit to creating a tempdir or doing render work.
@@ -383,14 +591,6 @@ def cmd_convert(args: argparse.Namespace) -> int:
         print("ERROR: PDF has no pages to process.", file=sys.stderr)
         raise SystemExit(1)
 
-    if args.reformat and args.no_intermediates:
-        print(
-            "error: --reformat requires --intermediates "
-            "(results would be discarded)",
-            file=sys.stderr,
-        )
-        return 1
-
     if keep_intermediates:
         layout, render_target = _resolve_layout(args.pdf, args.intermediates_dir, True)
         return _run_pipeline(
@@ -403,7 +603,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
             retry_config=retry_config,
             fallback_to_text=fallback_to_text,
             started=started,
-            reformat=args.reformat,
+            no_cache=no_cache_flags,
         )
 
     with tempfile.TemporaryDirectory(prefix="pdf2md_agent_") as td_str:
@@ -426,8 +626,66 @@ def cmd_convert(args: argparse.Namespace) -> int:
             retry_config=retry_config,
             fallback_to_text=fallback_to_text,
             started=started,
-            reformat=args.reformat,
+            no_cache=no_cache_flags,
         )
+
+
+def _render_pages(
+    *,
+    pdf: Path,
+    render_target: Path,
+    dpi: int,
+    resolved_pages: list[int] | None,
+    keep_intermediates: bool,
+    no_cache_render: bool,
+    no_cache_text: bool,
+) -> list[PageImage]:
+    """Render the PDF, optionally reusing per-page PNG/text cache.
+
+    When ``keep_intermediates`` is True and the no-cache flags are unset,
+    pages whose PNG/text are already on disk are returned without touching
+    PyMuPDF — that's the trust-cache fast path. With either flag set, the
+    pipeline always re-renders / re-extracts.
+    """
+    if not keep_intermediates or no_cache_render or no_cache_text:
+        return render_pdf(pdf, render_target, dpi=dpi, pages=resolved_pages)
+
+    from pdf2md_agent.cache import CacheLayout
+    layout = CacheLayout(
+        root=render_target.parent,
+        pages_dir=render_target,
+        summary_path=render_target.parent / "summary.json",
+        meta_path=render_target.parent / "meta.json",
+    )
+
+    target_pages: list[int] = (
+        list(resolved_pages) if resolved_pages is not None
+        else list(range(1, _pdf_page_count(pdf) + 1))
+    )
+    missing: list[int] = [
+        n for n in target_pages if _maybe_skip_render(layout, n, dpi) is None
+    ]
+    if missing:
+        render_pdf(pdf, render_target, dpi=dpi, pages=missing)
+    pages: list[PageImage] = []
+    for n in target_pages:
+        png = layout.page_png_path(n)
+        with Image.open(png) as img:
+            pages.append(PageImage(
+                page_number=n,
+                width=img.width,
+                height=img.height,
+                image_path=png,
+            ))
+    return pages
+
+
+def _pdf_page_count(pdf: Path) -> int:
+    doc = pymupdf.open(pdf)
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
 
 
 def _run_pipeline(
@@ -438,32 +696,64 @@ def _run_pipeline(
     resolved_pages: list[int] | None,
     keep_intermediates: bool,
     with_summary: bool,
-    reformat: bool = False,
     retry_config: RetryConfig,
     fallback_to_text: bool,
     started: float,
+    no_cache: CacheNoCacheFlags,
 ) -> int:
     log.info("converting %s", args.pdf)
     log.info("  output:          %s", args.output)
     log.info("  cache:           %s", layout.root if keep_intermediates else "(tempdir, discarded)")
     log.info("  dpi:             %d", args.dpi)
     log.info("  pages:           %s", "all" if resolved_pages is None else resolved_pages)
-    log.info("  reformat:        %s", "yes" if reformat else "no")
+    log.info("  no-cache:        %s", no_cache.as_dict())
     log.info("  cross-page:      %s", "summary" if with_summary else "independent")
-    log.info("  resume:          %s", "yes" if args.resume else "no")
     log.info("  text-hint:       %s", "on" if not args.no_text_hint else "off")
 
     if keep_intermediates:
+        existing_meta = read_meta(layout.meta_path)
+        if existing_meta is not None:
+            reasons = check_meta_matches(
+                existing_meta,
+                pdf=str(args.pdf.resolve()),
+                dpi=args.dpi,
+                with_summary=with_summary,
+                pages=resolved_pages,
+                model=args.model,
+                persona_version=args.persona_version,
+            )
+            if reasons:
+                for r in reasons:
+                    print(f"error: cache invalid: {r}", file=sys.stderr)
+                print(
+                    "error: meta.json fingerprint drift detected. "
+                    "re-run with --no-cache-all or wipe "
+                    f"{layout.root} to rebuild the cache.",
+                    file=sys.stderr,
+                )
+                return 1
         write_meta(
             layout.meta_path,
             pdf=args.pdf,
             dpi=args.dpi,
             with_summary=with_summary,
             pages=resolved_pages,
+            model=args.model,
+            persona_version=args.persona_version,
         )
+        if not with_summary and layout.summary_path.exists():
+            layout.summary_path.unlink()
 
     log.info("rendering PDF to PNGs at %d dpi%s...", args.dpi, " (subset)" if resolved_pages else "")
-    pages = render_pdf(args.pdf, render_target, dpi=args.dpi, pages=resolved_pages)
+    pages = _render_pages(
+        pdf=args.pdf,
+        render_target=render_target,
+        dpi=args.dpi,
+        resolved_pages=resolved_pages,
+        keep_intermediates=keep_intermediates,
+        no_cache_render=no_cache.render,
+        no_cache_text=no_cache.text,
+    )
     log.info("rendered %d page(s) to %s", len(pages), render_target)
 
     log.info("running pipeline: extract + format%s", " + summarize" if with_summary else "")
@@ -494,7 +784,7 @@ def _run_pipeline(
         pages=pages,
         layout=layout,
         with_summary=with_summary,
-        resume=args.resume,
+        no_cache=no_cache,
         text_hint=not args.no_text_hint,
         llm=llm,
         retry_config=retry_config,
@@ -505,7 +795,11 @@ def _run_pipeline(
         image_jpeg_quality=image_jpeg_quality,
         max_summary_chars=max_summary_chars,
         token_budget_safety=TOKEN_BUDGET_SAFETY,
-        reformat=reformat,
+        request_timeout_seconds=(
+            args.request_timeout
+            if args.request_timeout is not None
+            else REQUEST_TIMEOUT_SECONDS
+        ),
     )
 
     stitch_mode = StitchMode(args.stitch_mode)

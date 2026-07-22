@@ -1,10 +1,13 @@
 """Misc coverage: cache, pdf_renderer.read_page_text, runner._strip_think, CLI smoke."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import pymupdf
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +20,8 @@ from pdf2md_agent.cache import (
     write_summary,
 )
 from pdf2md_agent.cli import _atomic_write_text, _safe_cache_stem, _safe_intermediates_dir
+from pdf2md_agent.config import MODEL_NAME
+from pdf2md_agent.crew import agents
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
 from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
@@ -155,7 +160,31 @@ def test_cli_parse_known_args() -> None:
     assert args.no_intermediates is False
     assert args.no_summary is False
     assert args.no_text_hint is False
-    assert args.no_fallback_to_text is False  # default — env may still override
+    assert args.no_fallback_to_text is False
+    assert args.model == MODEL_NAME
+    assert args.persona_version == agents.PERSONA_VERSION
+
+
+def test_help_lists_argument_groups() -> None:
+    """The --help output must surface the four logical groups so users
+    can discover flags without reading the README."""
+    parser = cli.build_parser()
+    help_text = parser.format_help()
+    for group in ("Pipeline", "Cache control", "Feature disable", "Retry & tuning"):
+        assert group in help_text, f"missing help group: {group}"
+    assert "Diagnostic" in help_text
+
+
+def test_persona_version_hashes_active_personas() -> None:
+    joined = "\x00".join(
+        (
+            agents.EXTRACTOR_PERSONA,
+            agents.FORMATTER_PERSONA_STRICT,
+            agents.SUMMARIZER_PERSONA,
+        )
+    )
+    assert agents.PERSONA_VERSION == hashlib.sha256(joined.encode()).hexdigest()[:16]
+    assert "PERSONA_VERSION" in agents.__all__
 
 
 def test_cli_parse_pages_spec() -> None:
@@ -175,6 +204,34 @@ def test_cli_main_missing_pdf_returns_1(capsys) -> None:
     assert rc == 1
     err = capsys.readouterr().err
     assert "input PDF not found" in err
+
+
+def test_cli_version_prints_and_exits(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--version"])
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "pdf2md-agent" in out
+    from pdf2md_agent import __about__
+    assert __about__.__version__ in out
+
+
+def test_cli_request_timeout_rejects_zero() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--request-timeout", "0"])
+
+
+def test_cli_request_timeout_rejects_negative() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--request-timeout", "-1"])
+
+
+def test_cli_max_retries_rejects_zero() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--max-retries", "0"])
 
 
 def test_encode_local_image_non_image_raises_image_encode_error(tmp_path: Path) -> None:
@@ -212,7 +269,6 @@ def test_atomic_write_mode_is_0o600_on_posix(tmp_path: Path) -> None:
 
 
 def test_safe_intermediates_dir_accepts_normal_path() -> None:
-    from pathlib import Path
     result = _safe_intermediates_dir("out/cache")
     assert isinstance(result, Path)
 
@@ -264,3 +320,54 @@ def test_safe_cache_stem_no_suffix_off_windows() -> None:
     if __import__("sys").platform == "win32":
         pytest.skip("non-windows variant")
     assert _safe_cache_stem("CON") == "CON"
+
+
+# --- meta fingerprint drift (BLOCKER 3/3 of PR #8) -----------------------
+
+
+def test_meta_fingerprint_drift_refuses_run(tmp_path: Path, caplog, monkeypatch) -> None:
+    """A second run whose ``--dpi`` differs from the cached meta must be
+    refused with a non-zero exit and a clear stderr message. Regression:
+    PR #8 introduced ``read_meta`` / ``check_meta_matches`` but never
+    wired them into the CLI, so a DPI (or model / persona) drift would
+    happily re-use the stale cached outputs.
+    """
+    from pdf2md_agent.cache import write_meta
+
+    cache_root = tmp_path / "cache"
+    layout = CacheLayout.for_pdf(cache_root, tmp_path / "input.pdf")
+    write_meta(
+        layout.meta_path,
+        pdf=tmp_path / "input.pdf",
+        dpi=144,
+        with_summary=True,
+        model="MiniMax-M3",
+        persona_version="0123456789abcdef",
+    )
+
+    pdf_path = tmp_path / "input.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    captured: dict[str, str] = {"stdout": "", "stderr": ""}
+
+    def _capture_print(msg: str, *args, **kwargs) -> None:
+        stream = kwargs.get("file", None)
+        if stream is None or stream is sys.stdout:
+            captured["stdout"] += msg + "\n"
+        else:
+            captured["stderr"] += msg + "\n"
+
+    with patch.object(cli, "_render_pages", return_value=[]), \
+         patch.object(cli, "make_vision_llm", return_value=object()), \
+         patch.object(cli, "run_pipeline", return_value=[]), \
+         patch.object(cli, "stitch_pages", return_value=""), \
+         patch("builtins.print", side_effect=_capture_print):
+        rc = cli.main([
+            str(pdf_path),
+            "-o", str(tmp_path / "out.md"),
+            "--dpi", "200",
+            "--intermediates-dir", str(cache_root),
+        ])
+    assert rc == 1, "drift must refuse the run with exit code 1"
+    assert "dpi changed" in captured["stderr"]
+    assert "--no-cache-all" in captured["stderr"]

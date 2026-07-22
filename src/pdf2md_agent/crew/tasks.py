@@ -160,8 +160,6 @@ def make_extract_task(
 def make_format_task(
     formatter: Agent,
     extract_task: Task,
-    *,
-    reformat: bool = False,
 ) -> Task:
     """Create the cleanup task; sees the extractor's output via context."""
     description = (
@@ -169,17 +167,9 @@ def make_format_task(
         "broken lists, normalize table syntax, strip OCR noise.\n\n"
         f"{_COMMON_TASK_RULES}"
     )
-    if reformat:
-        description += (
-            "\n\nAdditionally drop headers/footers/page numbers as layout "
-            "artifacts. All other text must survive verbatim."
-        )
     return Task(
         description=description,
-        expected_output=(
-            "Clean CommonMark markdown of the page, language preserved"
-            + (", headers/footers/page numbers removed" if reformat else "")
-        ),
+        expected_output="Clean CommonMark markdown of the page, language preserved",
         agent=formatter,
         context=[extract_task],
     )
@@ -191,11 +181,12 @@ def make_format_task_from_extract_file(
 ) -> Task:
     """Format task fed from a cached ``page_NNNN_extract.txt`` on disk.
 
-    Used by ``--reformat`` mode when the user wants to re-format without
-    re-running the extractor. The file's full text is pasted into the
-    description as a fenced block — the same seam used by ``_text_hint_block``
-    in the extract pipeline — so the runner has no new tool surface to
-    maintain.
+    Used when the runner trusts the cached extract (the ``--no-cache-extract``
+    flag is unset) but still wants a fresh formatter pass — typically a
+    resume-after-failure retry, or a manual re-run where only the formatter
+    has changed. The file's full text is pasted into the description as a
+    fenced block, matching the ``_text_hint_block`` seam so the runner has
+    no new tool surface to maintain.
 
     Caller is responsible for ensuring the file exists (gate on
     ``cache.has_cached_extract`` first).
@@ -204,18 +195,16 @@ def make_format_task_from_extract_file(
     return Task(
         description=(
             "Rewrite the extracted markdown below as strict CommonMark. "
-            "Drop running headers, page footers, and page numbers as "
-            "layout artifacts. Preserve all other text verbatim.\n\n"
+            "Preserve every word verbatim — do not drop, translate, or "
+            "rewrite content. Only normalize formatting; output language "
+            "must exactly match the input.\n\n"
             f"{_COMMON_TASK_RULES}\n\n"
             "Extracted content (read from disk; treat as ground truth):\n"
             "```\n"
             f"{text}\n"
             "```"
         ),
-        expected_output=(
-            "Clean CommonMark markdown of the page, language preserved, "
-            "headers/footers/page numbers removed"
-        ),
+        expected_output="Clean CommonMark markdown of the page, language preserved",
         agent=formatter,
         context=[],
     )
