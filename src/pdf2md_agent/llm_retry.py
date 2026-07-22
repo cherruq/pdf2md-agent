@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 import secrets
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
@@ -212,13 +211,41 @@ def _call_with_timeout(
     fn: Callable[[], T_co],
     timeout_seconds: float,
 ) -> T_co:
-    """Run ``fn()`` on a worker thread; raise :class:`_TimeoutCause` on overrun."""
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn)
+    """Run ``fn()`` on a daemon thread; raise :class:`_TimeoutCause` on overrun.
+
+    A previous implementation wrapped a one-shot
+    :class:`concurrent.futures.ThreadPoolExecutor` in a ``with`` block. The
+    block's ``__exit__`` calls ``executor.shutdown(wait=True)`` which
+    blocks the caller until the worker thread completes — so when ``fn``
+    hangs the timeout-guard raised its marker exception only **after** the
+    hung call had already finished, defeating the whole point of the
+    wall-clock guard. We now spawn a ``daemon=True`` thread per call and
+    ``join(timeout=...)`` on it. The caller returns as soon as the timeout
+    fires; the abandoned worker keeps running but is killed on process
+    exit (daemon=True). The SDK's own ``timeout`` argument forwarded to
+    the LLM call eventually unblocks the inner I/O, so the orphan
+    thread is short-lived in practice.
+    """
+    import threading
+
+    holder: list[object] = [None, None, False]
+
+    def _runner() -> None:
         try:
-            return future.result(timeout=timeout_seconds)
-        except FuturesTimeout as exc:
-            raise _TimeoutCause() from exc
+            holder[0] = fn()
+        except BaseException as exc:  # noqa: BLE001 — re-raised by the joiner below
+            holder[1] = exc
+        finally:
+            holder[2] = True
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    if not holder[2]:
+        raise _TimeoutCause()
+    if holder[1] is not None:
+        raise holder[1]
+    return holder[0]
 
 
 def _dummy_request() -> object:

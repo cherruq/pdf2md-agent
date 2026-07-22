@@ -621,3 +621,35 @@ def test_call_with_retry_treats_timeout_as_transient(caplog) -> None:
             sleep=lambda _w: None,
         )
     assert any("timed out" in rec.message for rec in caplog.records)
+
+
+def test_call_with_retry_timeout_actually_bounds_wall_clock() -> None:
+    """The wall-clock timeout must bound the caller's wait, not just raise
+    on the eventual return. Regression: the previous
+    ``with ThreadPoolExecutor(...)`` implementation blocked on
+    ``shutdown(wait=True)`` after the timeout fired, so the caller waited
+    the full duration of the hung call (``time.sleep(2.0)``) instead of
+    the configured 0.2s.
+    """
+    import time as _time
+    from openai import APITimeoutError
+    from pdf2md_agent.llm_retry import RetryConfig, call_with_retry
+
+    def _hung_fn() -> None:
+        _time.sleep(2.0)
+
+    start = _time.monotonic()
+    with pytest.raises(APITimeoutError):
+        call_with_retry(
+            _hung_fn,
+            config=RetryConfig(
+                max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+            ),
+            timeout_seconds=0.2,
+            sleep=lambda _w: None,
+        )
+    elapsed = _time.monotonic() - start
+    assert elapsed < 1.0, (
+        f"timeout-guard did not bound the caller: elapsed={elapsed:.3f}s "
+        f"(should be <1.0s for timeout_seconds=0.2s)"
+    )
