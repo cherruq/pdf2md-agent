@@ -34,17 +34,6 @@ def maybe_skip_render(
     return png
 
 
-def maybe_skip_text(layout: CacheLayout, page_number: int) -> str | None:
-    """Return the cached native-text layer for ``page_number`` or ``None``."""
-    text = layout.page_text_path(page_number)
-    if not text.is_file():
-        return None
-    try:
-        return text.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-
 def maybe_skip_resized(
     layout: CacheLayout, page_number: int, needed_long_side: int
 ) -> Path | None:

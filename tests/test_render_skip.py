@@ -13,7 +13,6 @@ from pdf2md_agent.pdf_renderer import render_pdf
 from pdf2md_agent.render_skip import (
     maybe_skip_render,
     maybe_skip_resized,
-    maybe_skip_text,
 )
 
 
@@ -66,20 +65,6 @@ def test_maybe_skip_render_returns_none_when_dpi_mismatches(tmp_path: Path) -> N
     sidecar.write_text(json.dumps({"dpi": 200}), encoding="utf-8")
 
     assert maybe_skip_render(layout, 1, dpi=144) is None
-
-
-# --- maybe_skip_text --------------------------------------------------------
-
-
-def test_maybe_skip_text_returns_none_when_missing(tmp_path: Path) -> None:
-    layout = _make_layout(tmp_path, tmp_path / "x.pdf")
-    assert maybe_skip_text(layout, 1) is None
-
-
-def test_maybe_skip_text_returns_cached_contents(tmp_path: Path) -> None:
-    layout = _make_layout(tmp_path, tmp_path / "x.pdf")
-    layout.page_text_path(1).write_text("hello world", encoding="utf-8")
-    assert maybe_skip_text(layout, 1) == "hello world"
 
 
 # --- maybe_skip_resized -----------------------------------------------------
