@@ -163,6 +163,7 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         max_summary_chars=None,
         ctx_limit=None,
         stitch_mode="heuristic",
+        request_timeout=None,
         model=agents.PERSONA_VERSION,
         persona_version=agents.PERSONA_VERSION,
     )
@@ -596,3 +597,27 @@ def test_to_sentinel_returns_action_or_fallback_for_remote_url() -> None:
     sentinel = _to_sentinel("https://example.test/x.png", action=None)
     assert "could not inline image" in sentinel
     assert "https://example.test/x.png" in sentinel
+
+
+def test_call_with_retry_treats_timeout_as_transient(caplog) -> None:
+    """A wall-clock timeout guard surfaces as a transient ``APITimeoutError``
+    so the existing retry path re-issues the call instead of giving up."""
+    import time as _time
+    from openai import APITimeoutError
+    from pdf2md_agent.llm_retry import RetryConfig, call_with_retry
+
+    caplog.set_level("WARNING", logger="pdf2md_agent.llm_retry")
+
+    def _slow_fn() -> None:
+        _time.sleep(0.2)
+
+    with pytest.raises(APITimeoutError):
+        call_with_retry(
+            _slow_fn,
+            config=RetryConfig(
+                max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+            ),
+            timeout_seconds=0.05,
+            sleep=lambda _w: None,
+        )
+    assert any("timed out" in rec.message for rec in caplog.records)

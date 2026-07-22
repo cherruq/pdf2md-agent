@@ -205,6 +205,34 @@ def test_cli_main_missing_pdf_returns_1(capsys) -> None:
     assert "input PDF not found" in err
 
 
+def test_cli_version_prints_and_exits(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--version"])
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "pdf2md-agent" in out
+    from pdf2md_agent import __about__
+    assert __about__.__version__ in out
+
+
+def test_cli_request_timeout_rejects_zero() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--request-timeout", "0"])
+
+
+def test_cli_request_timeout_rejects_negative() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--request-timeout", "-1"])
+
+
+def test_cli_max_retries_rejects_zero() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--max-retries", "0"])
+
+
 def test_encode_local_image_non_image_raises_image_encode_error(tmp_path: Path) -> None:
     bogus = tmp_path / "fake.jpg"
     bogus.write_text("not an image", encoding="utf-8")

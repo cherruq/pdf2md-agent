@@ -182,6 +182,7 @@ def run_pipeline(
     max_summary_chars: int = MAX_SUMMARY_CHARS,
     token_budget_safety: float = TOKEN_BUDGET_SAFETY,
     dpi: int = 144,
+    request_timeout_seconds: float | None = None,
 ) -> list[PageResult]:
     """Run the per-page CrewAI pipeline across ``pages`` and return page results.
 
@@ -381,6 +382,7 @@ def run_pipeline(
                 crew.kickoff,
                 config=retry_config or RetryConfig(),
                 label=f"page {page.page_number}",
+                timeout_seconds=request_timeout_seconds,
             )
         except ValidationError as exc:
             if not fallback_to_text:
@@ -469,6 +471,7 @@ def _run_format_summarize_only(
     retry_config: RetryConfig,
     fallback_to_text: bool,
     max_summary_chars: int,
+    request_timeout_seconds: float | None = None,
 ) -> tuple[str, str, bool]:
     """Run formatter + (optional) summarizer without the extractor.
 
@@ -513,6 +516,7 @@ def _run_format_summarize_only(
             crew.kickoff,
             config=retry_config,
             label=f"reformat page {page_number}",
+            timeout_seconds=request_timeout_seconds,
         )
         format_md = _output(format_t)
         summary_out = _output(summarize_t) if summarize_t is not None else summary_in

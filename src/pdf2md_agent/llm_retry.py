@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
@@ -112,6 +113,7 @@ def call_with_retry(
     config: RetryConfig = RetryConfig(),
     label: str = "llm",
     sleep: Callable[[float], None] = time.sleep,
+    timeout_seconds: float | None = None,
 ) -> T_co:
     """Call ``fn`` with bounded exponential-backoff retry on transient failures.
 
@@ -121,6 +123,11 @@ def call_with_retry(
 
     ``sleep`` is injectable for tests so we can assert retry counts without
     actually waiting.
+
+    ``timeout_seconds`` is a wall-clock guard for each attempt: when the
+    call exceeds the budget, an :class:`APITimeoutError` is raised. The
+    guard is layered on top of the SDK's own ``timeout`` so hangs inside
+    crewAI's internal pipelines are also bounded.
     """
     delay = config.initial_delay
     last_exc: Exception | None = None
@@ -132,7 +139,41 @@ def call_with_retry(
             config.max_attempts,
         )
         try:
-            return fn()
+            if timeout_seconds is None:
+                return fn()
+            return _call_with_timeout(fn, timeout_seconds)
+        except _TimeoutCause as exc:
+            log.warning(
+                "%s: attempt %d/%d timed out after %.1fs; treating as transient",
+                label,
+                attempt,
+                config.max_attempts,
+                timeout_seconds,
+            )
+            last_exc = APITimeoutError(request=_dummy_request())
+            _ = exc
+            if attempt >= config.max_attempts:
+                log.error(
+                    "%s: giving up after %d attempt(s): %s",
+                    label,
+                    attempt,
+                    _safe_exc_summary(last_exc),
+                )
+                raise last_exc
+            jittered = delay * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
+            wait = max(0.0, min(jittered, config.max_delay))
+            log.info(
+                "%s: retrying after transient %s on attempt %d/%d (%s); sleeping %.2fs",
+                label,
+                "Timeout",
+                attempt,
+                config.max_attempts,
+                _safe_exc_summary(last_exc),
+                wait,
+            )
+            sleep(wait)
+            delay = min(delay * config.backoff, config.max_delay)
+            continue
         except Exception as exc:  # noqa: BLE001 — predicate is `is_transient` below
             if not is_transient(exc):
                 raise
@@ -148,8 +189,7 @@ def call_with_retry(
             jittered = delay * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
             wait = max(0.0, min(jittered, config.max_delay))
             log.info(
-                "%s: retrying after transient %s on attempt %d/%d (%s); "
-                "sleeping %.2fs",
+                "%s: retrying after transient %s on attempt %d/%d (%s); sleeping %.2fs",
                 label,
                 type(exc).__name__,
                 attempt,
@@ -159,11 +199,32 @@ def call_with_retry(
             )
             sleep(wait)
             delay = min(delay * config.backoff, config.max_delay)
-    # Unreachable: the loop always returns or raises. Explicit guard for
-    # type-checkers and for `python -O` (asserts are stripped under -O).
     if last_exc is None:
         raise RuntimeError("unreachable: retry loop must set last_exc")
     raise last_exc  # pragma: no cover
+
+
+class _TimeoutCause(Exception):
+    """Internal marker: distinguishes a timeout-guard hit from caller raises."""
+
+
+def _call_with_timeout(
+    fn: Callable[[], T_co],
+    timeout_seconds: float,
+) -> T_co:
+    """Run ``fn()`` on a worker thread; raise :class:`_TimeoutCause` on overrun."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeout as exc:
+            raise _TimeoutCause() from exc
+
+
+def _dummy_request() -> object:
+    import httpx
+
+    return httpx.Request("GET", "https://example.test/")
 
 
 __all__ = [

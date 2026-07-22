@@ -168,6 +168,7 @@ def test_render_skip_honours_no_cache_render_flag(
         max_summary_chars=None,
         ctx_limit=None,
         stitch_mode="heuristic",
+        request_timeout=None,
         model="m",
         persona_version="0123456789abcdef",
     )

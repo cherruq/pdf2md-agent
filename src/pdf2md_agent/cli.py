@@ -10,6 +10,7 @@ import time
 import pymupdf
 from pathlib import Path
 
+from pdf2md_agent import __about__
 from pdf2md_agent.cache import (
     CacheLayout,
     CacheNoCacheFlags,
@@ -24,6 +25,7 @@ from pdf2md_agent.config import (
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
     MODEL_NAME,
+    REQUEST_TIMEOUT_SECONDS,
     RETRY_BACKOFF,
     RETRY_INITIAL_DELAY,
     RETRY_JITTER,
@@ -45,6 +47,50 @@ from pdf2md_agent.render_skip import (
 from pdf2md_agent.vision import make_vision_llm
 
 log = logging.getLogger("pdf2md-agent")
+
+
+class _VersionAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None,
+    ) -> None:
+        print(f"pdf2md-agent {__about__.__version__}")
+        parser.exit(0)
+
+
+def _request_timeout_type(raw: str) -> float:
+    """argparse ``type=`` for ``--request-timeout`` (0.1s–600s)."""
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--request-timeout must be a number, got {raw!r}"
+        ) from exc
+    if not 0.1 <= value <= 600.0:
+        raise argparse.ArgumentTypeError(
+            f"--request-timeout must be in [0.1, 600], got {value}"
+        )
+    return value
+
+
+def _positive_int_type(name: str, minimum: int) -> Callable[[str], int]:
+    def _parser(raw: str) -> int:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"--{name} must be an integer, got {raw!r}"
+            ) from exc
+        if value < minimum:
+            raise argparse.ArgumentTypeError(
+                f"--{name} must be >= {minimum}, got {value}"
+            )
+        return value
+
+    return _parser
 
 
 _NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
@@ -260,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tuning.add_argument(
         "--max-retries",
-        type=int,
+        type=_positive_int_type("max-retries", 1),
         default=None,
         help=(
             "Total LLM call attempts per page (initial + retries). Overrides "
@@ -305,7 +351,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tuning.add_argument(
         "--image-long-side",
-        type=int,
+        type=_positive_int_type("image-long-side", 64),
         default=None,
         metavar="PX",
         help=(
@@ -318,7 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tuning.add_argument(
         "--image-quality",
-        type=int,
+        type=_positive_int_type("image-quality", 1),
         default=None,
         metavar="Q",
         help=(
@@ -330,7 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tuning.add_argument(
         "--max-summary-chars",
-        type=int,
+        type=_positive_int_type("max-summary-chars", 100),
         default=None,
         metavar="N",
         help=(
@@ -341,12 +387,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tuning.add_argument(
         "--ctx-limit",
-        type=int,
+        type=_positive_int_type("ctx-limit", 256),
         default=None,
         metavar="TOK",
         help=(
             "Model context-window token limit the runner budgets against. "
             "Used only when PDF2MD_AGENT_CTX_LIMIT is wrong. Default: 2013."
+        ),
+    )
+    tuning.add_argument(
+        "--request-timeout",
+        type=_request_timeout_type,
+        default=None,
+        metavar="SEC",
+        help=(
+            "Per-attempt wall-clock timeout (seconds, 0.1-600). Overrides "
+            "PDF2MD_AGENT_REQUEST_TIMEOUT. Default: 60.0."
         ),
     )
 
@@ -372,6 +428,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    parser.add_argument(
+        "-V", "--version",
+        action=_VersionAction,
+        nargs=0,
+        help="Print the pdf2md-agent version and exit.",
+    )
     return parser
 
 
@@ -685,6 +747,11 @@ def _run_pipeline(
         image_jpeg_quality=image_jpeg_quality,
         max_summary_chars=max_summary_chars,
         token_budget_safety=TOKEN_BUDGET_SAFETY,
+        request_timeout_seconds=(
+            args.request_timeout
+            if args.request_timeout is not None
+            else REQUEST_TIMEOUT_SECONDS
+        ),
     )
 
     stitch_mode = StitchMode(args.stitch_mode)

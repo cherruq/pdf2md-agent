@@ -1,2 +1,4 @@
 """Convert PDF documents to markdown via a CrewAI vision pipeline."""
-__version__ = "0.2.0"
+from pdf2md_agent.__about__ import __version__
+
+__all__ = ["__version__"]
