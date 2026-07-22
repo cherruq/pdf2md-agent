@@ -38,6 +38,16 @@ def test_parse_rejects_bad_input(bad: str) -> None:
         parse_page_spec(bad)
 
 
+def test_parse_rejects_negative_with_friendly_text() -> None:
+    """Negative or end-before-start ranges raise with the page-help keyword
+    so the CLI error message points users back at the --pages help."""
+    with pytest.raises(argparse.ArgumentTypeError) as exc_info:
+        parse_page_spec("-3")
+    assert "integer" in str(exc_info.value)
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_page_spec("5-3")
+
+
 def test_parse_rejects_oversized_range() -> None:
     """Rejects ``1-N`` ranges whose span exceeds the DoS guard.
 
