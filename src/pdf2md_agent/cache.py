@@ -374,18 +374,67 @@ def is_page_complete(layout: CacheLayout, page_number: int) -> bool:
     )
 
 
-def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
-    """True if a cached ``page_NNNN_extract.txt`` exists for this page.
+@dataclass(frozen=True, slots=True)
+class CacheNoCacheFlags:
+    """Per-resource opt-out switches for the no-cache flag family.
 
-    Independent of ``format.md``: ``--reformat`` mode uses this to decide
-    whether to skip the extractor for a given page.
+    Default semantics: trust cached output (every flag ``False``). Setting a
+    flag to ``True`` invalidates the corresponding cache resource for the
+    duration of the run — the runner treats the resource as missing and
+    rebuilds it from scratch.
+
+    * ``render`` — skip the per-page PNG render when one already exists at
+      the configured DPI. Setting it forces a re-render.
+    * ``text`` — skip the per-page ``_text.txt`` re-emit when the cache
+      file exists.
+    * ``resized`` — skip the downscaled JPEG re-resize when the cache file
+      already matches the budgeted ``long_side``.
+    * ``extract`` — don't trust the cached ``extract.txt``; re-run the
+      extractor (downstream format/summarize still trust their own cache
+      unless those flags are set too).
+    * ``format`` — don't trust the cached ``format.md``; re-run the
+      formatter. Short-circuits the entire per-page pipeline if the
+      cached markdown is unavailable.
+    * ``summary`` — don't trust ``summary.json``; start the running
+      summary fresh (no per-page pre-seed).
     """
-    return layout.page_extract_path(page_number).is_file()
+
+    render: bool = False
+    text: bool = False
+    resized: bool = False
+    extract: bool = False
+    format: bool = False
+    summary: bool = False
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "render": self.render,
+            "text": self.text,
+            "resized": self.resized,
+            "extract": self.extract,
+            "format": self.format,
+            "summary": self.summary,
+        }
+
+
+def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
+    """True if a cached ``page_NNNN_extract.txt`` exists for this page
+    AND its content is non-empty.
+
+    A zero-byte extract file is the sentinel for "this page attempted but
+    the vision model failed and we fell back to the text layer" — trusting
+    it would propagate an empty markdown into the formatter. The non-empty
+    gate makes the fallback path observable to users and keeps the
+    no-cache re-extract logic safe.
+    """
+    path = layout.page_extract_path(page_number)
+    return path.is_file() and path.stat().st_size > 0
 
 
 __all__ = [
     "CacheCorruptedError",
     "CacheLayout",
+    "CacheNoCacheFlags",
     "MetaInfo",
     "PageArtifacts",
     "atomic_write_text",

@@ -142,12 +142,17 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         dpi=144,
         pages=None,
         no_intermediates=False,
-        reformat=False,
         intermediates_dir=None,
-        resume=False,
         no_summary=False,
         no_text_hint=False,
         no_fallback_to_text=False,
+        no_cache_render=False,
+        no_cache_text=False,
+        no_cache_resized=False,
+        no_cache_extract=False,
+        no_cache_format=False,
+        no_cache_summary=False,
+        no_cache_all=False,
         max_retries=None,
         retry_initial_delay=None,
         retry_backoff=None,
@@ -158,7 +163,7 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         max_summary_chars=None,
         ctx_limit=None,
         stitch_mode="heuristic",
-        model=agents.PERSONA_VERSION,  # any string; write_meta passes through
+        model=agents.PERSONA_VERSION,
         persona_version=agents.PERSONA_VERSION,
     )
 
@@ -231,19 +236,12 @@ def test_cmd_convert_missing_pdf_returns_1(
     assert "input PDF not found" in err
 
 
-def test_cmd_convert_reformat_with_no_intermediates_rejected(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """``--reformat`` requires ``--intermediates``; the CLI rejects the combo early."""
-    pdf = _make_onepage_pdf(tmp_path / "in.pdf")
-    args = _build_minimal_args(tmp_path, pdf)
-    args.reformat = True
-    args.no_intermediates = True
-
-    rc = cli.cmd_convert(args)
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "--reformat requires --intermediates" in err
+def test_cmd_convert_rejects_reformat_with_no_intermediates_rejected(tmp_path: Path) -> None:
+    """Legacy --reformat removed: parser must reject the flag with a clear
+    error so users see the new --no-cache-* family."""
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["in.pdf", "-o", "x.md", "--reformat"])
 
 
 # ===========================================================================
@@ -273,6 +271,7 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
          patch.object(cli, "stitch_pages", return_value="stitched body") as mock_stitch, \
          patch.object(cli, "_atomic_write_text") as mock_atomic, \
          patch.object(cli, "write_meta"):
+        from pdf2md_agent.cache import CacheNoCacheFlags
         rc = cli._run_pipeline(
             args=args,
             layout=layout,
@@ -285,6 +284,7 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
             ).RetryConfig(),
             fallback_to_text=True,
             started=__import__("time").monotonic(),
+            no_cache=CacheNoCacheFlags(),
         )
 
     assert rc == 0

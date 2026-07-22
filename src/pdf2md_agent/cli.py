@@ -10,7 +10,12 @@ import time
 import pymupdf
 from pathlib import Path
 
-from pdf2md_agent.cache import CacheLayout, atomic_write_text, write_meta
+from pdf2md_agent.cache import (
+    CacheLayout,
+    CacheNoCacheFlags,
+    atomic_write_text,
+    write_meta,
+)
 from pdf2md_agent.config import (
     CTX_LIMIT,
     FALLBACK_TO_TEXT,
@@ -35,6 +40,35 @@ from pdf2md_agent.post_stream import StitchMode, stitch_pages
 from pdf2md_agent.vision import make_vision_llm
 
 log = logging.getLogger("pdf2md-agent")
+
+
+_NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
+    "render",
+    "text",
+    "resized",
+    "extract",
+    "format",
+    "summary",
+)
+
+
+class _NoCacheAllAction(argparse.Action):
+    """Sets every ``--no-cache-*`` flag to True when ``--no-cache-all`` is set.
+
+    Implemented as a custom ``Action`` so post-parse resolution happens
+    automatically regardless of argument order on the command line.
+    """
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None,
+    ) -> None:
+        for name in _NO_CACHE_FLAG_NAMES:
+            setattr(namespace, f"no_cache_{name}", True)
+        setattr(namespace, "no_cache_all", True)
 
 
 def _safe_intermediates_dir(value: str) -> Path:
@@ -128,25 +162,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip writing intermediate cache files.",
     )
     parser.add_argument(
-        "--reformat",
-        action="store_true",
-        help=(
-            "Re-run the formatter (and summarizer) on cached extract.txt; "
-            "skips the extractor. The formatter uses a layout-aware persona "
-            "that drops page headers, footers, and page numbers. Requires "
-            "--intermediates (incompatible with --no-intermediates)."
-        ),
-    )
-    parser.add_argument(
         "--intermediates-dir",
         type=_safe_intermediates_dir,
         default=None,
         help="Override the intermediates cache directory (default: .pdf2md-agent-cache/<pdf_stem>/).",
-    )
-    parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="Reuse cached per-page outputs when present; only re-run missing pages.",
     )
     parser.add_argument(
         "--no-summary",
@@ -232,10 +251,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="Q",
         help=(
-            "JPEG quality (1-95) used when the runner downsamples page "
-            "images. Higher values preserve detail but enlarge the per-"
-            "call token cost. Overrides PDF2MD_AGENT_IMAGE_JPEG_QUALITY. "
-            "Default: 85."
+            "JPEG quality (1-100) used when the runner downsamples page "
+            "images. Higher values preserve detail but enlarge the per-call "
+            "token cost. 75-95 is the practical sweet spot. Overrides "
+            "PDF2MD_AGENT_IMAGE_JPEG_QUALITY. Default: 85."
         ),
     )
     parser.add_argument(
@@ -287,7 +306,43 @@ def build_parser() -> argparse.ArgumentParser:
             "the SHA-256[:16] of the active persona strings."
         ),
     )
+    for name in _NO_CACHE_FLAG_NAMES:
+        parser.add_argument(
+            f"--no-cache-{name}",
+            action="store_true",
+            default=False,
+            dest=f"no_cache_{name}",
+            help=argparse.SUPPRESS,
+        )
+    parser.add_argument(
+        "--no-cache-all",
+        action=_NoCacheAllAction,
+        nargs=0,
+        default=False,
+        dest="no_cache_all",
+        help=(
+            "Disable every cache reuse (render/text/resized/extract/"
+            "format/summary). Equivalent to passing all six --no-cache-* "
+            "flags."
+        ),
+    )
     return parser
+
+
+def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
+    """Build a :class:`CacheNoCacheFlags` from CLI flags.
+
+    The ``--no-cache-all`` action already flips every per-resource flag,
+    so this is a straight attribute-to-field copy.
+    """
+    return CacheNoCacheFlags(
+        render=bool(args.no_cache_render),
+        text=bool(args.no_cache_text),
+        resized=bool(args.no_cache_resized),
+        extract=bool(args.no_cache_extract),
+        format=bool(args.no_cache_format),
+        summary=bool(args.no_cache_summary),
+    )
 
 
 def _resolve_layout(
@@ -380,6 +435,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     started = time.monotonic()
     keep_intermediates = not args.no_intermediates
     with_summary = not args.no_summary
+    no_cache_flags = _resolve_no_cache_flags(args)
 
     # Resolve --pages against the PDF's actual page count so out-of-range
     # errors surface before we commit to creating a tempdir or doing render work.
@@ -402,14 +458,6 @@ def cmd_convert(args: argparse.Namespace) -> int:
         print("ERROR: PDF has no pages to process.", file=sys.stderr)
         raise SystemExit(1)
 
-    if args.reformat and args.no_intermediates:
-        print(
-            "error: --reformat requires --intermediates "
-            "(results would be discarded)",
-            file=sys.stderr,
-        )
-        return 1
-
     if keep_intermediates:
         layout, render_target = _resolve_layout(args.pdf, args.intermediates_dir, True)
         return _run_pipeline(
@@ -422,7 +470,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
             retry_config=retry_config,
             fallback_to_text=fallback_to_text,
             started=started,
-            reformat=args.reformat,
+            no_cache=no_cache_flags,
         )
 
     with tempfile.TemporaryDirectory(prefix="pdf2md_agent_") as td_str:
@@ -445,7 +493,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
             retry_config=retry_config,
             fallback_to_text=fallback_to_text,
             started=started,
-            reformat=args.reformat,
+            no_cache=no_cache_flags,
         )
 
 
@@ -457,19 +505,18 @@ def _run_pipeline(
     resolved_pages: list[int] | None,
     keep_intermediates: bool,
     with_summary: bool,
-    reformat: bool = False,
     retry_config: RetryConfig,
     fallback_to_text: bool,
     started: float,
+    no_cache: CacheNoCacheFlags,
 ) -> int:
     log.info("converting %s", args.pdf)
     log.info("  output:          %s", args.output)
     log.info("  cache:           %s", layout.root if keep_intermediates else "(tempdir, discarded)")
     log.info("  dpi:             %d", args.dpi)
     log.info("  pages:           %s", "all" if resolved_pages is None else resolved_pages)
-    log.info("  reformat:        %s", "yes" if reformat else "no")
+    log.info("  no-cache:        %s", no_cache.as_dict())
     log.info("  cross-page:      %s", "summary" if with_summary else "independent")
-    log.info("  resume:          %s", "yes" if args.resume else "no")
     log.info("  text-hint:       %s", "on" if not args.no_text_hint else "off")
 
     if keep_intermediates:
@@ -515,7 +562,7 @@ def _run_pipeline(
         pages=pages,
         layout=layout,
         with_summary=with_summary,
-        resume=args.resume,
+        no_cache=no_cache,
         text_hint=not args.no_text_hint,
         llm=llm,
         retry_config=retry_config,
@@ -526,7 +573,6 @@ def _run_pipeline(
         image_jpeg_quality=image_jpeg_quality,
         max_summary_chars=max_summary_chars,
         token_budget_safety=TOKEN_BUDGET_SAFETY,
-        reformat=reformat,
     )
 
     stitch_mode = StitchMode(args.stitch_mode)

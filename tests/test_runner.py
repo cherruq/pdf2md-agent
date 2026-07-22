@@ -10,7 +10,7 @@ import pytest
 from openai import APITimeoutError, BadRequestError
 from pydantic import ValidationError
 
-from pdf2md_agent.cache import CacheLayout
+from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.crew import runner
 from pdf2md_agent.crew.runner import PageImage, run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
@@ -52,6 +52,10 @@ def _page(page_number: int) -> PageImage:
     )
 
 
+def _no_cache() -> CacheNoCacheFlags:
+    return CacheNoCacheFlags()
+
+
 def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -79,7 +83,7 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
                 pages=[page],
                 layout=layout,
                 with_summary=False,
-                resume=False,
+                no_cache=_no_cache(),
                 text_hint=False,
                 llm=object(),  # type: ignore[arg-type]
                 retry_config=RetryConfig(
@@ -93,7 +97,6 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
     assert "vision model unavailable" in md
     assert "hello world" in md
     assert "from pdf text layer" in md
-    # Cache files are written for resume to work on the next run.
     assert layout.page_extract_path(1).exists()
     assert layout.page_format_path(1).exists()
     assert any("falling back to text layer" in rec.message for rec in caplog.records)
@@ -121,7 +124,7 @@ def test_run_pipeline_does_not_fall_back_for_permanent_errors(
                     pages=[page],
                     layout=layout,
                     with_summary=False,
-                    resume=False,
+                    no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
@@ -153,7 +156,7 @@ def test_run_pipeline_propagates_when_fallback_disabled(
                     pages=[page],
                     layout=layout,
                     with_summary=False,
-                    resume=False,
+                    no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
@@ -199,7 +202,7 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
                 pages=[page],
                 layout=layout,
                 with_summary=False,
-                resume=False,
+                no_cache=_no_cache(),
                 text_hint=False,
                 llm=object(),  # type: ignore[arg-type]
                 retry_config=RetryConfig(
@@ -240,7 +243,7 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
                     pages=[page],
                     layout=layout,
                     with_summary=False,
-                    resume=False,
+                    no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
@@ -252,13 +255,9 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
 
 def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
     """The non-reformat path must continue to use the strict, verbatim
-    formatter persona — never the layout-aware one. This guards against
-    accidental swap when make_formatter() is refactored.
-
-    Strengthened (D8-012): also verifies the formatter's CommonMark-shaped
-    output propagates through to the returned ``PageResult.markdown`` and
-    the on-disk ``format.md`` — not merely that ``result["md_text"]``
-    exists.
+    formatter persona. Strengthened (D8-012): also verifies the formatter's
+    CommonMark-shaped output propagates through to the returned
+    ``PageResult.markdown`` and the on-disk ``format.md``.
     """
     page = _page(1)
     layout = _make_layout(tmp_path, 1, "text layer content\n")
@@ -288,7 +287,7 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
                     pages=[page],
                     layout=layout,
                     with_summary=False,
-                    resume=False,
+                    no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
@@ -296,11 +295,10 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
                     ),
                     fallback_to_text=True,
                 )
-            called_reformat = any(
-                call.kwargs.get("reformat") is True
-                for call in mk.call_args_list
+            called_with_kw = any(
+                "reformat" in call.kwargs for call in mk.call_args_list
             )
-            assert called_reformat is False, (
+            assert called_with_kw is False, (
                 "Default run_pipeline must not call make_formatter(reformat=True)"
             )
 
