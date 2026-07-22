@@ -650,7 +650,6 @@ def _render_pages(
     if not keep_intermediates or no_cache_render or no_cache_text:
         return render_pdf(pdf, render_target, dpi=dpi, pages=resolved_pages)
 
-    from pdf2md_agent.cache import CacheLayout
     layout = CacheLayout(
         root=render_target.parent,
         pages_dir=render_target,
