@@ -34,6 +34,7 @@ from PIL import Image
 from pdf2md_agent import cli
 from pdf2md_agent.cache import CacheLayout
 from pdf2md_agent.cli import _resolve_layout
+from pdf2md_agent.crew import agents
 from pdf2md_agent.crew.multimodal_patch import (
     _encode_local_image,
     _to_data_url,
@@ -157,6 +158,8 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         max_summary_chars=None,
         ctx_limit=None,
         stitch_mode="heuristic",
+        model=agents.PERSONA_VERSION,  # any string; write_meta passes through
+        persona_version=agents.PERSONA_VERSION,
     )
 
 

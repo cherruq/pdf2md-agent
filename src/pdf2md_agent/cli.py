@@ -18,6 +18,7 @@ from pdf2md_agent.config import (
     IMAGE_LONG_SIDE,
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
+    MODEL_NAME,
     RETRY_BACKOFF,
     RETRY_INITIAL_DELAY,
     RETRY_JITTER,
@@ -25,6 +26,7 @@ from pdf2md_agent.config import (
     RETRY_MAX_DELAY,
     TOKEN_BUDGET_SAFETY,
 )
+from pdf2md_agent.crew.agents import PERSONA_VERSION
 from pdf2md_agent.crew.runner import run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec, resolve_pages
@@ -268,6 +270,23 @@ def build_parser() -> argparse.ArgumentParser:
             "'off' preserves the legacy '\\n\\n---\\n\\n' separator verbatim."
         ),
     )
+    parser.add_argument(
+        "--model",
+        default=MODEL_NAME,
+        help=(
+            "Model name to record in meta.json for fingerprint validation. "
+            "Defaults to PDF2MD_AGENT_MODEL (default: MiniMax-M3)."
+        ),
+    )
+    parser.add_argument(
+        "--persona-version",
+        default=PERSONA_VERSION,
+        help=(
+            "Persona fingerprint (16-char hex) recorded in meta.json. The "
+            "runner refuses to re-use cache when this drifts. Defaults to "
+            "the SHA-256[:16] of the active persona strings."
+        ),
+    )
     return parser
 
 
@@ -460,6 +479,8 @@ def _run_pipeline(
             dpi=args.dpi,
             with_summary=with_summary,
             pages=resolved_pages,
+            model=args.model,
+            persona_version=args.persona_version,
         )
 
     log.info("rendering PDF to PNGs at %d dpi%s...", args.dpi, " (subset)" if resolved_pages else "")

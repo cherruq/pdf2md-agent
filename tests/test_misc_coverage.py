@@ -1,10 +1,12 @@
 """Misc coverage: cache, pdf_renderer.read_page_text, runner._strip_think, CLI smoke."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import pymupdf
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +19,8 @@ from pdf2md_agent.cache import (
     write_summary,
 )
 from pdf2md_agent.cli import _atomic_write_text, _safe_cache_stem, _safe_intermediates_dir
+from pdf2md_agent.config import MODEL_NAME
+from pdf2md_agent.crew import agents
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
 from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
@@ -156,6 +160,20 @@ def test_cli_parse_known_args() -> None:
     assert args.no_summary is False
     assert args.no_text_hint is False
     assert args.no_fallback_to_text is False  # default — env may still override
+    assert args.model == MODEL_NAME
+    assert args.persona_version == agents.PERSONA_VERSION
+
+
+def test_persona_version_hashes_active_personas() -> None:
+    joined = "\x00".join(
+        (
+            agents.EXTRACTOR_PERSONA,
+            agents.FORMATTER_PERSONA_STRICT,
+            agents.SUMMARIZER_PERSONA,
+        )
+    )
+    assert agents.PERSONA_VERSION == hashlib.sha256(joined.encode()).hexdigest()[:16]
+    assert "PERSONA_VERSION" in agents.__all__
 
 
 def test_cli_parse_pages_spec() -> None:
@@ -212,7 +230,6 @@ def test_atomic_write_mode_is_0o600_on_posix(tmp_path: Path) -> None:
 
 
 def test_safe_intermediates_dir_accepts_normal_path() -> None:
-    from pathlib import Path
     result = _safe_intermediates_dir("out/cache")
     assert isinstance(result, Path)
 

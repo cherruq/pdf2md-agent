@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import pdf2md_agent.cache as cache
 from pdf2md_agent.cache import (
     CacheCorruptedError,
     atomic_write_text,
@@ -16,7 +17,14 @@ from pdf2md_agent.cache import (
 
 def test_write_meta_without_pages(tmp_path: Path) -> None:
     meta = tmp_path / "meta.json"
-    write_meta(meta, pdf=tmp_path / "x.pdf", dpi=144, with_summary=True)
+    write_meta(
+        meta,
+        pdf=tmp_path / "x.pdf",
+        dpi=144,
+        with_summary=True,
+        model="MiniMax-M3",
+        persona_version="0123456789abcdef",
+    )
     payload = json.loads(meta.read_text(encoding="utf-8"))
     assert payload["pages"] is None
     assert payload["dpi"] == 144
@@ -31,6 +39,8 @@ def test_write_meta_with_pages(tmp_path: Path) -> None:
         dpi=144,
         with_summary=False,
         pages=[1, 2, 5],
+        model="MiniMax-M3",
+        persona_version="0123456789abcdef",
     )
     payload = json.loads(meta.read_text(encoding="utf-8"))
     assert payload["pages"] == [1, 2, 5]
@@ -71,3 +81,132 @@ def test_atomic_write_text_round_trip(tmp_path: Path) -> None:
     target = tmp_path / "out.json"
     atomic_write_text(target, "hello world 中文")
     assert target.read_text(encoding="utf-8") == "hello world 中文"
+
+
+def test_write_meta_persists_all_six_fields(tmp_path: Path) -> None:
+    meta = tmp_path / "meta.json"
+    write_meta(
+        meta,
+        pdf=tmp_path / "input.pdf",
+        dpi=200,
+        with_summary=False,
+        pages=[3, 1],
+        model="vision-model",
+        persona_version="fedcba9876543210",
+    )
+
+    assert json.loads(meta.read_text(encoding="utf-8")) == {
+        "pdf": str(tmp_path / "input.pdf"),
+        "dpi": 200,
+        "with_summary": False,
+        "pages": [3, 1],
+        "model": "vision-model",
+        "persona_version": "fedcba9876543210",
+    }
+
+
+def test_read_meta_missing_returns_none(tmp_path: Path) -> None:
+    assert cache.read_meta(tmp_path / "missing.json") is None
+
+
+def test_read_meta_invalid_json_returns_none(tmp_path: Path) -> None:
+    meta = tmp_path / "meta.json"
+    meta.write_text("{invalid", encoding="utf-8")
+    assert cache.read_meta(meta) is None
+
+
+def test_read_meta_non_object_returns_none(tmp_path: Path) -> None:
+    meta = tmp_path / "meta.json"
+    meta.write_text("[]", encoding="utf-8")
+    assert cache.read_meta(meta) is None
+
+
+def test_read_meta_missing_field_returns_none(tmp_path: Path) -> None:
+    meta = tmp_path / "meta.json"
+    meta.write_text(
+        json.dumps(
+            {
+                "pdf": "/tmp/input.pdf",
+                "dpi": 144,
+                "with_summary": True,
+                "pages": None,
+                "model": "vision-model",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert cache.read_meta(meta) is None
+
+
+def test_read_meta_wrong_pages_shape_returns_none(tmp_path: Path) -> None:
+    meta = tmp_path / "meta.json"
+    meta.write_text(
+        json.dumps(
+            {
+                "pdf": "/tmp/input.pdf",
+                "dpi": 144,
+                "with_summary": True,
+                "pages": "1,2",
+                "model": "vision-model",
+                "persona_version": "0123456789abcdef",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert cache.read_meta(meta) is None
+
+
+def _meta_info() -> cache.MetaInfo:
+    return cache.MetaInfo(
+        pdf="/tmp/input.pdf",
+        dpi=144,
+        with_summary=True,
+        pages=(1, 2, 5),
+        model="vision-model",
+        persona_version="0123456789abcdef",
+    )
+
+
+def _current_meta_values() -> dict[str, str | int | bool | list[int] | None]:
+    return {
+        "pdf": "/tmp/input.pdf",
+        "dpi": 144,
+        "with_summary": True,
+        "pages": [1, 2, 5],
+        "model": "vision-model",
+        "persona_version": "0123456789abcdef",
+    }
+
+
+def test_check_meta_matches_no_diff_when_identical() -> None:
+    assert cache.check_meta_matches(_meta_info(), **_current_meta_values()) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "different"),
+    [
+        ("pdf", "/tmp/other.pdf"),
+        ("dpi", 200),
+        ("with_summary", False),
+        ("pages", [1, 3]),
+        ("model", "other-model"),
+        ("persona_version", "fedcba9876543210"),
+    ],
+)
+def test_check_meta_matches_reports_each_field(
+    field: str,
+    different: str | int | bool | list[int],
+) -> None:
+    current = _current_meta_values()
+    current[field] = different
+
+    reasons = cache.check_meta_matches(_meta_info(), **current)
+
+    assert len(reasons) == 1
+    assert field in reasons[0]
+
+
+def test_check_meta_matches_pages_set_order_invariant() -> None:
+    current = _current_meta_values()
+    current["pages"] = [5, 1, 2]
+    assert cache.check_meta_matches(_meta_info(), **current) == []

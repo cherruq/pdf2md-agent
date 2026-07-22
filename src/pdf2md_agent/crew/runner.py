@@ -33,7 +33,13 @@ from pdf2md_agent.config import (
     MODEL_NAME,
     TOKEN_BUDGET_SAFETY,
 )
-from pdf2md_agent.crew.agents import EXTRACTOR_BACKSTORY, make_extractor, make_formatter, make_summarizer
+from pdf2md_agent.crew.agents import (
+    EXTRACTOR_BACKSTORY,
+    PERSONA_VERSION,
+    make_extractor,
+    make_formatter,
+    make_summarizer,
+)
 from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
 from pdf2md_agent.crew.tasks import (
     _truncate_summary,
@@ -203,13 +209,11 @@ def run_pipeline(
     # the standard pipeline path lazy-inits anything it needs on demand
     # below. Building them up front would do work for agents that get
     # thrown away when --reformat short-circuits the page.
-    extractor = None
-    formatter = None
-    summarizer = None
-    if not reformat:
-        formatter = make_formatter(llm)
-        if with_summary:
-            summarizer = make_summarizer(llm)
+    extractor: Agent | None = None
+    formatter = make_formatter(llm)
+    summarizer: Agent | None = None
+    if with_summary:
+        summarizer = make_summarizer(llm)
 
     patch_add_image_tool(
         target_long_side=image_long_side,
@@ -221,11 +225,12 @@ def run_pipeline(
     pipeline_started = time.monotonic()
     total = len(pages)
     log.info(
-        "pipeline started: pages=%d, dpi=%d, model=%s, with_summary=%s, "
-        "resume=%s, reformat=%s",
+        "pipeline started: pages=%d, dpi=%d, model=%s, persona=%s, "
+        "with_summary=%s, resume=%s, reformat=%s",
         total,
         dpi,
         MODEL_NAME,
+        PERSONA_VERSION,
         with_summary,
         resume,
         reformat,
@@ -298,11 +303,6 @@ def run_pipeline(
             )
             # falls through to the standard pipeline below
 
-        # Lazy-init extractor/formatter/summarizer only when the standard
-        # pipeline path actually runs. --reformat + cached extract
-        # short-circuited above, so these agents stay unbuilt in that
-        # case. On a reformat→full-pipeline fallback (extract.txt
-        # missing) we construct them here, just in time.
         if extractor is None:
             extractor = make_extractor(llm)
         if formatter is None:
@@ -496,7 +496,7 @@ def _run_format_summarize_only(
 
     Returns ``(format_md, summary_out, did_fallback)``.
     """
-    formatter = make_formatter(llm, reformat=True)
+    formatter = make_formatter(llm)
     format_t = make_format_task_from_extract_file(formatter, artifacts.extract_text)
 
     if not with_summary:

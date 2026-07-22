@@ -5,10 +5,16 @@ comfortably inside the ``MiniMax-M3`` ~2 k-token context window alongside
 the per-page task description, the running summary, the text-hint, and
 the base64-encoded page image. The persona strings are exported as
 ``EXTRACTOR_PERSONA`` / ``FORMATTER_PERSONA_STRICT`` /
-``FORMATTER_PERSONA_REFORMAT`` / ``SUMMARIZER_PERSONA`` so
-the runner can budget their token cost before issuing each call.
+``SUMMARIZER_PERSONA`` so the runner can budget their token cost before
+issuing each call.
+
+``PERSONA_VERSION`` is a 16-char SHA-256 digest of the joined persona
+strings; the runner records it in ``meta.json`` so a follow-up run
+detects persona-text drift and refuses to re-use stale cached outputs.
 """
 from __future__ import annotations
+
+import hashlib
 
 from crewai import Agent, LLM
 
@@ -38,20 +44,6 @@ FORMATTER_PERSONA_STRICT: str = (
     "language must exactly match input."
 )
 
-FORMATTER_PERSONA_REFORMAT: str = (
-    "Markdown Formatter (Layout-Aware). "
-    "Rewrite extracted markdown as strict CommonMark and drop repeating "
-    "page-level layout artifacts (running headers, document titles "
-    "repeated at the top, copyright / license / print notices at the "
-    "bottom, isolated or 'N / M' style page numbers, page-footer URLs); "
-    "preserve all body content verbatim.\n\n"
-    "You rewrite extracted markdown as strict CommonMark. Treat repeating "
-    "page headers, page footers, and page numbers as layout artifacts "
-    "and omit them. Preserve every other word, CJK character, and "
-    "punctuation mark from the input verbatim. Do not translate, "
-    "summarize, or rewrite body content."
-)
-
 SUMMARIZER_PERSONA: str = (
     "Running Summary Keeper. "
     "Maintain a tight rolling summary of preceding pages so the next "
@@ -63,6 +55,15 @@ SUMMARIZER_PERSONA: str = (
     "source language. If the prior summary was truncated to fit the context "
     "window, prioritize absorbing newly visible content."
 )
+
+
+PERSONA_VERSION: str = hashlib.sha256(
+    "\x00".join(
+        (EXTRACTOR_PERSONA, FORMATTER_PERSONA_STRICT, SUMMARIZER_PERSONA)
+    ).encode("utf-8")
+).hexdigest()[:16]
+"""SHA-256[:16] of the active persona strings. Fingerprint recorded in
+``meta.json`` so a follow-up run detects text drift in any persona."""
 
 
 def make_extractor(llm: LLM) -> Agent:
@@ -82,26 +83,12 @@ def make_extractor(llm: LLM) -> Agent:
     )
 
 
-def make_formatter(llm: LLM, *, reformat: bool = False) -> Agent:
+def make_formatter(llm: LLM) -> Agent:
     """Build the agent that cleans extracted markdown into strict CommonMark.
 
-    When ``reformat`` is True the agent uses a layout-aware persona that
-    drops page headers, footers, and page numbers in addition to the
-    CommonMark normalization.
+    Strict CommonMark is the only formatter persona; the prior layout-aware
+    variant was removed when the path-B cache rename dropped ``--reformat``.
     """
-    if reformat:
-        return Agent(
-            role="Markdown Formatter (Layout-Aware)",
-            goal=(
-                "Rewrite extracted markdown as strict CommonMark, "
-                "dropping running headers, page footers, and page "
-                "numbers — preserve every other word verbatim."
-            ),
-            backstory=_persona_backstory(FORMATTER_PERSONA_REFORMAT),
-            llm=llm,
-            verbose=False,
-            allow_delegation=False,
-        )
     return Agent(
         role="Markdown Formatter",
         goal=(
@@ -139,3 +126,15 @@ def _persona_backstory(persona: str) -> str:
 
 
 EXTRACTOR_BACKSTORY: str = _persona_backstory(EXTRACTOR_PERSONA)
+
+
+__all__ = [
+    "EXTRACTOR_BACKSTORY",
+    "EXTRACTOR_PERSONA",
+    "FORMATTER_PERSONA_STRICT",
+    "PERSONA_VERSION",
+    "SUMMARIZER_PERSONA",
+    "make_extractor",
+    "make_formatter",
+    "make_summarizer",
+]
