@@ -17,10 +17,9 @@ It is designed to be robust on adversarial inputs:
   + jitter; on retry exhaustion the page falls back to the PDF's native
   text layer (with a clearly-marked stub) instead of crashing the run.
 - **Resumable** — per-page outputs and the running summary are cached, so
-  re-running only fills in the pages that failed.
-- **Layout-aware (`--reformat`)** — re-runs only the formatter + summarizer
-  on cached extractor output, dropping running headers, footers, and page
-  numbers while preserving every word verbatim.
+  re-running only fills in the pages that failed. Per-resource opt-outs
+  (`--no-cache-{render,text,resized,extract,format,summary}`) let you
+  invalidate a single resource without redoing the whole pipeline.
 
 ## Table of contents
 
