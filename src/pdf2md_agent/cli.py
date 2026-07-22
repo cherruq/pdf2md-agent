@@ -28,7 +28,6 @@ from pdf2md_agent.config import (
     MAX_SUMMARY_CHARS,
     MODEL_NAME,
     REQUEST_TIMEOUT_SECONDS,
-    RETRY_BACKOFF,
     RETRY_INITIAL_DELAY,
     RETRY_JITTER,
     RETRY_MAX_ATTEMPTS,
@@ -331,11 +330,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tuning.add_argument(
         "--max-retries",
-        type=_positive_int_type("max-retries", 1),
+        type=_positive_int_type("max-retries", 0),
         default=None,
         help=(
-            "Total LLM call attempts per page (initial + retries). Overrides "
-            "PDF2MD_AGENT_MAX_RETRIES. Default: 4."
+            "Total LLM call attempts per page (initial + retries). Pass 0 "
+            "or omit to retry transient failures indefinitely. Overrides "
+            "PDF2MD_AGENT_MAX_RETRIES. Default: 0 (unlimited)."
         ),
     )
     tuning.add_argument(
@@ -343,17 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help=(
-            "Initial retry delay in seconds (exponential backoff). Overrides "
+            "Initial retry delay in seconds (Fibonacci base unit). Overrides "
             "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
-        ),
-    )
-    tuning.add_argument(
-        "--retry-backoff",
-        type=float,
-        default=None,
-        help=(
-            "Exponential backoff multiplier between retries. Overrides "
-            "PDF2MD_AGENT_RETRY_BACKOFF. Default: 2.0."
         ),
     )
     tuning.add_argument(
@@ -361,8 +352,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help=(
-            "Per-attempt retry delay cap in seconds. Overrides "
-            "PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 30.0."
+            "Per-attempt retry delay cap in seconds (Fibonacci growth cap). "
+            "Overrides PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 900.0 (15 min)."
         ),
     )
     tuning.add_argument(
@@ -511,18 +502,21 @@ _atomic_write_text = atomic_write_text
 
 def _build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
     """Build a RetryConfig from CLI args (override) + env (fallback). Returns None on invalid input."""
+    # ``--max-retries 0`` (or env PDF2MD_AGENT_MAX_RETRIES=0) → unlimited.
+    cli_max_attempts = args.max_retries
+    if cli_max_attempts == 0:
+        cli_max_attempts = None
     try:
         return RetryConfig(
             max_attempts=(
-                args.max_retries if args.max_retries is not None else RETRY_MAX_ATTEMPTS
+                cli_max_attempts
+                if cli_max_attempts is not None
+                else RETRY_MAX_ATTEMPTS
             ),
             initial_delay=(
                 args.retry_initial_delay
                 if args.retry_initial_delay is not None
                 else RETRY_INITIAL_DELAY
-            ),
-            backoff=(
-                args.retry_backoff if args.retry_backoff is not None else RETRY_BACKOFF
             ),
             max_delay=(
                 args.retry_max_delay
@@ -762,10 +756,9 @@ def _run_pipeline(
     log.info("running pipeline: extract + format%s", " + summarize" if with_summary else "")
     llm = make_vision_llm()
     log.info(
-        "  retry:           max_attempts=%d, initial_delay=%.1fs, backoff=%.1fx, max_delay=%.1fs, jitter=±%.0f%%",
-        retry_config.max_attempts,
+        "  retry:           max_attempts=%s, initial_delay=%.1fs, fibonacci, max_delay=%.1fs, jitter=±%.0f%%",
+        retry_config.max_attempts if retry_config.max_attempts is not None else "\u221e",
         retry_config.initial_delay,
-        retry_config.backoff,
         retry_config.max_delay,
         retry_config.jitter * 100,
     )

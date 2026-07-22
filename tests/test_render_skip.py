@@ -145,7 +145,6 @@ def test_render_skip_honours_no_cache_render_flag(
         no_cache_all=False,
         max_retries=None,
         retry_initial_delay=None,
-        retry_backoff=None,
         retry_max_delay=None,
         retry_jitter=None,
         image_long_side=None,

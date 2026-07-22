@@ -46,6 +46,27 @@ def _env_bool(name: str, default: bool) -> bool:
     raise ValueError(f"{name} must be a boolean (1/0/true/false/yes/no/on/off), got {raw!r}")
 
 
+def _env_int_or_unlimited(name: str) -> int | None:
+    """Read an integer-or-unlimited env knob.
+
+    Empty/unset → ``None`` (default = unlimited retries); ``"0"`` → ``None``
+    (explicit unlimited); positive integers → bounded attempt count.
+    Negative integers and non-numeric strings raise.
+    """
+    raw = _env(name)
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if value == 0:
+        return None
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1, got {value!r} (use 0 for unlimited)")
+    return value
+
+
 OPENAI_BASE_URL: Final[str] = _env("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
 MODEL_NAME: Final[str] = _env("PDF2MD_AGENT_MODEL", "MiniMax-M3")
 
@@ -81,13 +102,15 @@ MAX_SUMMARY_CHARS: Final[int] = _env_int("PDF2MD_AGENT_MAX_SUMMARY_CHARS", 800)
 
 
 # --- LLM retry / fallback knobs ---------------------------------------------
-# Defaults: 4 total attempts (1 initial + 3 retries) over ~7s of total wait
-# before giving up on a page and falling back to text-layer markdown.
+# Defaults: unlimited transient retries with Fibonacci backoff (per-attempt
+# delay capped at 15 min). Set PDF2MD_AGENT_MAX_RETRIES (or pass
+# --max-retries) to a positive integer to bound the budget.
 
-RETRY_MAX_ATTEMPTS: Final[int] = _env_int("PDF2MD_AGENT_MAX_RETRIES", 4)
+RETRY_MAX_ATTEMPTS: Final[int | None] = _env_int_or_unlimited(
+    "PDF2MD_AGENT_MAX_RETRIES"
+)
 RETRY_INITIAL_DELAY: Final[float] = _env_float("PDF2MD_AGENT_RETRY_INITIAL_DELAY", 1.0)
-RETRY_BACKOFF: Final[float] = _env_float("PDF2MD_AGENT_RETRY_BACKOFF", 2.0)
-RETRY_MAX_DELAY: Final[float] = _env_float("PDF2MD_AGENT_RETRY_MAX_DELAY", 30.0)
+RETRY_MAX_DELAY: Final[float] = _env_float("PDF2MD_AGENT_RETRY_MAX_DELAY", 900.0)
 RETRY_JITTER: Final[float] = _env_float("PDF2MD_AGENT_RETRY_JITTER", 0.25)
 FALLBACK_TO_TEXT: Final[bool] = _env_bool("PDF2MD_AGENT_FALLBACK_TO_TEXT", True)
 

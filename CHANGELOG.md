@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--reformat` removed. The layout-aware formatter persona was deleted; the only formatter persona is the strict CommonMark one.
 - Pre-`0.3.0` `meta.json` (4 fields) will fail fingerprint validation under any cache reuse. Wipe `.pdf2md-agent-cache/<stem>/` (or use `--no-cache-all` once) after upgrading.
 - `FORMATTER_PERSONA_REFORMAT` and the `reformat` parameter on `make_formatter` / `make_format_task` are gone. Cache files written under the old `--reformat` mode are no longer trusted by the new extract-short-circuit (the new path re-runs the strict formatter on whatever extract.txt is on disk).
+- Retry policy rewrite: `RetryConfig.backoff` and the `--retry-backoff` CLI flag are removed. Per-retry delays now follow the Fibonacci sequence (1, 1, 2, 3, 5, 8, 13, …) scaled by `--retry-initial-delay` (default 1.0s) and capped at `--retry-max-delay` (default 900s / 15 min). The default `--max-retries` is now `0` (= unlimited transient retries); pass a positive integer or `PDF2MD_AGENT_MAX_RETRIES` to bound the budget. Existing scripts that set `PDF2MD_AGENT_RETRY_BACKOFF` or rely on the previous 30s cap should be reviewed.
 
 ## [0.2.0] — 2026-07-17
 

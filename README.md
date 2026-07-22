@@ -118,12 +118,17 @@ overrides the env value for the current invocation.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `PDF2MD_AGENT_MAX_RETRIES` | `4` | Total LLM call attempts per page (initial + retries). |
-| `PDF2MD_AGENT_RETRY_INITIAL_DELAY` | `1.0` | Initial retry delay in seconds. |
-| `PDF2MD_AGENT_RETRY_BACKOFF` | `2.0` | Exponential backoff multiplier between retries. |
-| `PDF2MD_AGENT_RETRY_MAX_DELAY` | `30.0` | Per-attempt delay cap. |
+| `PDF2MD_AGENT_MAX_RETRIES` | `0` | Total LLM call attempts per page (initial + retries). `0` or unset = unlimited; positive integer = bounded budget. |
+| `PDF2MD_AGENT_RETRY_INITIAL_DELAY` | `1.0` | Initial retry delay in seconds (Fibonacci base unit). |
+| `PDF2MD_AGENT_RETRY_MAX_DELAY` | `900.0` | Per-attempt delay cap (seconds). Fibonacci growth clamps at this ceiling. |
 | `PDF2MD_AGENT_RETRY_JITTER` | `0.25` | Jitter ratio in `[0.0, 1.0]`. |
 | `PDF2MD_AGENT_FALLBACK_TO_TEXT` | `true` | If `true`, fall back to the PDF's native text layer on retry exhaustion; if `false`, raise. |
+
+Retry delays follow the Fibonacci sequence (1, 1, 2, 3, 5, 8, 13, …) scaled
+by `PDF2MD_AGENT_RETRY_INITIAL_DELAY`, capped at `PDF2MD_AGENT_RETRY_MAX_DELAY`
+(seconds) per attempt. With the default unlimited setting (`0`), transient
+failures are retried forever; non-transient failures (4xx) always propagate
+immediately.
 
 ### Pointing at a different provider
 

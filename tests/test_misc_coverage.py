@@ -228,10 +228,16 @@ def test_cli_request_timeout_rejects_negative() -> None:
         parser.parse_args(["in.pdf", "-o", "x.md", "--request-timeout", "-1"])
 
 
-def test_cli_max_retries_rejects_zero() -> None:
+def test_cli_max_retries_accepts_zero_for_unlimited() -> None:
+    parser = cli.build_parser()
+    args = parser.parse_args(["in.pdf", "-o", "x.md", "--max-retries", "0"])
+    assert args.max_retries == 0
+
+
+def test_cli_max_retries_rejects_negative() -> None:
     parser = cli.build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["in.pdf", "-o", "x.md", "--max-retries", "0"])
+        parser.parse_args(["in.pdf", "-o", "x.md", "--max-retries", "-1"])
 
 
 def test_encode_local_image_non_image_raises_image_encode_error(tmp_path: Path) -> None:

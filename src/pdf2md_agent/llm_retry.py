@@ -7,9 +7,11 @@ Vision-model calls go through the OpenAI SDK against a custom ``base_url``
 * transient server errors (HTTP 5xx, gateway 502/503/504)
 * rate-limit responses (HTTP 429)
 
-We retry those with exponential backoff + jitter. Permanent failures
-(authentication, bad request, permission denied) are NOT retried: re-issuing
-the exact same request just burns the budget and re-fails identically.
+We retry those with Fibonacci backoff + jitter, capped at a per-attempt
+delay (15 minutes by default). With ``max_attempts=None`` transient failures
+are retried indefinitely; permanent failures (authentication, bad request,
+permission denied) are NOT retried — re-issuing the exact same request
+just burns the budget and re-fails identically.
 
 The runner wraps each per-page ``crew.kickoff()`` in :func:`call_with_retry`
 and, on retry exhaustion, hands the page off to a fallback path that emits
@@ -20,6 +22,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
@@ -57,30 +60,43 @@ T_co = TypeVar("T_co")
 
 @dataclass(frozen=True, slots=True)
 class RetryConfig:
-    """Bounded exponential-backoff retry policy.
+    """Bounded Fibonacci-backoff retry policy.
 
-    Defaults give 4 total attempts over ~7 seconds of total wait, which is
-    well under the typical user-perceived "stuck" threshold for a CLI tool
-    while still riding out a short provider outage.
+    Defaults retry transient failures indefinitely (``max_attempts=None``)
+    with a Fibonacci growth schedule capped at ``max_delay`` (15 minutes by
+    default). The CLI's ``--max-retries`` flag accepts ``0`` as a synonym for
+    unlimited; pass an explicit integer to bound the budget.
     """
 
-    max_attempts: int = 4
+    max_attempts: int | None = None
     initial_delay: float = 1.0
-    backoff: float = 2.0
-    max_delay: float = 30.0
+    max_delay: float = 900.0
     jitter: float = 0.25
 
     def __post_init__(self) -> None:
-        if self.max_attempts < 1:
-            raise ValueError("max_attempts must be >= 1")
+        if self.max_attempts is not None:
+            if self.max_attempts < 1:
+                raise ValueError(
+                    "max_attempts must be None (unlimited) or >= 1; use 0 at the CLI/env boundary to mean unlimited"
+                )
         if self.initial_delay < 0:
             raise ValueError("initial_delay must be >= 0")
-        if self.backoff < 1.0:
-            raise ValueError("backoff must be >= 1.0")
         if self.max_delay < self.initial_delay:
             raise ValueError("max_delay must be >= initial_delay")
         if not 0.0 <= self.jitter <= 1.0:
             raise ValueError("jitter must be in [0.0, 1.0]")
+
+
+def _fibonacci_multipliers() -> Iterator[int]:
+    """Yield Fibonacci numbers 1, 1, 2, 3, 5, 8, ... ad infinitum.
+
+    Used by :func:`call_with_retry` to scale each retry delay: each
+    sleep = ``initial_delay * next(fibonacci)``, then capped at ``max_delay``.
+    """
+    a, b = 1, 1
+    while True:
+        yield a
+        a, b = b, a + b
 
 
 # Concrete transient exception types we always retry. ``APIStatusError`` is
@@ -114,7 +130,7 @@ def call_with_retry(
     sleep: Callable[[float], None] = time.sleep,
     timeout_seconds: float | None = None,
 ) -> T_co:
-    """Call ``fn`` with bounded exponential-backoff retry on transient failures.
+    """Call ``fn`` with Fibonacci-backoff retry on transient failures.
 
     The caller passes a zero-arg callable so each attempt is a fresh call
     (no shared mutable state across attempts). Non-transient exceptions
@@ -127,31 +143,44 @@ def call_with_retry(
     call exceeds the budget, an :class:`APITimeoutError` is raised. The
     guard is layered on top of the SDK's own ``timeout`` so hangs inside
     crewAI's internal pipelines are also bounded.
+
+    Per-retry sleeps grow by the Fibonacci sequence
+    (1, 1, 2, 3, 5, 8, 13, ...) scaled by ``initial_delay`` and capped at
+    ``max_delay``. With ``max_attempts=None`` (the default) transient
+    failures are retried indefinitely; non-transient failures always
+    propagate immediately, regardless of the cap.
     """
-    delay = config.initial_delay
+    bound = (
+        str(config.max_attempts) if config.max_attempts is not None else "\u221e"
+    )
     last_exc: Exception | None = None
-    for attempt in range(1, config.max_attempts + 1):
+    fib_multipliers = _fibonacci_multipliers()
+    attempt = 0
+    # Only exits: ``return`` (success) or ``raise`` (terminal transient
+    # exhaustion / non-transient propagation). Infinite when max_attempts=None.
+    while config.max_attempts is None or attempt < config.max_attempts:
+        attempt += 1
         log.info(
-            "%s: attempt %d/%d started",
+            "%s: attempt %d/%s started",
             label,
             attempt,
-            config.max_attempts,
+            bound,
         )
         try:
             if timeout_seconds is None:
                 return fn()
             return _call_with_timeout(fn, timeout_seconds)
         except _TimeoutCause as exc:
+            _ = exc
             log.warning(
-                "%s: attempt %d/%d timed out after %.1fs; treating as transient",
+                "%s: attempt %d/%s timed out after %.1fs; treating as transient",
                 label,
                 attempt,
-                config.max_attempts,
+                bound,
                 timeout_seconds,
             )
             last_exc = APITimeoutError(request=_dummy_request())
-            _ = exc
-            if attempt >= config.max_attempts:
+            if config.max_attempts is not None and attempt >= config.max_attempts:
                 log.error(
                     "%s: giving up after %d attempt(s): %s",
                     label,
@@ -159,25 +188,22 @@ def call_with_retry(
                     _safe_exc_summary(last_exc),
                 )
                 raise last_exc
-            jittered = delay * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
-            wait = max(0.0, min(jittered, config.max_delay))
+            wait = _compute_fibonacci_wait(config, next(fib_multipliers))
             log.info(
-                "%s: retrying after transient %s on attempt %d/%d (%s); sleeping %.2fs",
+                "%s: retrying after transient %s on attempt %d/%s (%s); sleeping %.2fs",
                 label,
                 "Timeout",
                 attempt,
-                config.max_attempts,
+                bound,
                 _safe_exc_summary(last_exc),
                 wait,
             )
             sleep(wait)
-            delay = min(delay * config.backoff, config.max_delay)
-            continue
         except Exception as exc:  # noqa: BLE001 — predicate is `is_transient` below
             if not is_transient(exc):
                 raise
             last_exc = exc
-            if attempt >= config.max_attempts:
+            if config.max_attempts is not None and attempt >= config.max_attempts:
                 log.error(
                     "%s: giving up after %d attempt(s): %s",
                     label,
@@ -185,22 +211,26 @@ def call_with_retry(
                     _safe_exc_summary(exc),
                 )
                 raise
-            jittered = delay * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
-            wait = max(0.0, min(jittered, config.max_delay))
+            wait = _compute_fibonacci_wait(config, next(fib_multipliers))
             log.info(
-                "%s: retrying after transient %s on attempt %d/%d (%s); sleeping %.2fs",
+                "%s: retrying after transient %s on attempt %d/%s (%s); sleeping %.2fs",
                 label,
                 type(exc).__name__,
                 attempt,
-                config.max_attempts,
+                bound,
                 _safe_exc_summary(exc),
                 wait,
             )
             sleep(wait)
-            delay = min(delay * config.backoff, config.max_delay)
     if last_exc is None:
         raise RuntimeError("unreachable: retry loop must set last_exc")
     raise last_exc  # pragma: no cover
+
+
+def _compute_fibonacci_wait(config: RetryConfig, multiplier: int) -> float:
+    uncapped = config.initial_delay * multiplier
+    jittered = uncapped * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
+    return max(0.0, min(jittered, config.max_delay))
 
 
 class _TimeoutCause(Exception):

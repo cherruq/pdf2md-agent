@@ -46,7 +46,7 @@ pdf2md-agent/
 | `pdf2md_agent.render_skip.maybe_skip_render` | render_skip.py:18 | Trust-cache gate for per-page PNG re-render |
 | `pdf2md_agent.multimodal_patch.patch_add_image_tool` | multimodal_patch.py:134 | idempotent monkey-patch on `AddImageTool._run` (REQUIRED) |
 | `pdf2md_agent.post_stream.stitch_pages` | post_stream.py:54 | cross-page markdown joining (StreamingStitcher, default mode) |
-| `pdf2md_agent.llm_retry.call_with_retry` | llm_retry.py:130 | bounded exponential backoff + jitter + per-attempt timeout guard |
+| `pdf2md_agent.llm_retry.call_with_retry` | llm_retry.py | Fibonacci backoff + jitter, default unlimited retries, per-attempt cap `max_delay` (15 min), per-attempt timeout guard |
 | `pdf2md_agent.token_budget.plan_for_image` | token_budget.py:192 | binary-search largest `long_side` that fits budget |
 
 ## CONVENTIONS (project-specific only)
