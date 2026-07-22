@@ -30,7 +30,7 @@ def test_retry_config_defaults_are_valid() -> None:
     cfg = RetryConfig()
     assert cfg.max_attempts is None
     assert cfg.max_delay == 900.0
-    assert cfg.initial_delay >= 0
+    assert cfg.initial_delay > 0
     assert 0.0 <= cfg.jitter <= 1.0
 
 
@@ -54,10 +54,16 @@ def test_retry_config_rejects_negative_max_attempts() -> None:
         RetryConfig(max_attempts=-1)
 
 
+def test_retry_config_rejects_zero_initial_delay() -> None:
+    with pytest.raises(ValueError, match="initial_delay"):
+        RetryConfig(initial_delay=0.0)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
         {"initial_delay": -0.1},
+        {"initial_delay": 0.0},
         {"max_delay": 0.1, "initial_delay": 1.0},
         {"jitter": -0.1},
         {"jitter": 1.5},
@@ -214,7 +220,7 @@ def test_call_with_retry_label_is_passed_through(caplog) -> None:
     with pytest.raises(APITimeoutError):
         call_with_retry(
             fn,
-            config=RetryConfig(max_attempts=2, initial_delay=0.0, jitter=0.0),
+            config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
             label="page 7",
             sleep=sleeps.append,
         )
@@ -300,7 +306,7 @@ def test_call_with_retry_infinite_max_attempts_propagates_non_transient() -> Non
     with pytest.raises(BadRequestError):
         call_with_retry(
             fn,
-            config=RetryConfig(max_attempts=None, initial_delay=0.0, jitter=0.0),
+            config=RetryConfig(max_attempts=None, initial_delay=0.001, jitter=0.0),
             sleep=lambda _w: None,
         )
     assert len(attempts) == 1

@@ -614,7 +614,7 @@ def test_call_with_retry_treats_timeout_as_transient(caplog) -> None:
         call_with_retry(
             _slow_fn,
             config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             timeout_seconds=0.05,
             sleep=lambda _w: None,
@@ -642,7 +642,7 @@ def test_call_with_retry_timeout_actually_bounds_wall_clock() -> None:
         call_with_retry(
             _hung_fn,
             config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             timeout_seconds=0.2,
             sleep=lambda _w: None,

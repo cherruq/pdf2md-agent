@@ -343,7 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help=(
-            "Initial retry delay in seconds (Fibonacci base unit). Overrides "
+            "Initial retry delay in seconds (Fibonacci base unit). Must be "
+            "> 0; a zero or negative value is rejected. Overrides "
             "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
         ),
     )

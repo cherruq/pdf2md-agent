@@ -201,7 +201,7 @@ def test_no_cache_format_reruns_full_pipeline(
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
         )
@@ -256,7 +256,7 @@ def test_no_cache_extract_runs_formatter_only(
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
         )
@@ -292,7 +292,7 @@ def test_no_cache_extract_falls_through_when_extract_missing(
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
         )
@@ -324,7 +324,7 @@ def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
         )
@@ -367,7 +367,7 @@ def test_no_cache_summary_does_not_seed(tmp_path: Path) -> None:
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
         )

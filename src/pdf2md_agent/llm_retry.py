@@ -66,6 +66,10 @@ class RetryConfig:
     with a Fibonacci growth schedule capped at ``max_delay`` (15 minutes by
     default). The CLI's ``--max-retries`` flag accepts ``0`` as a synonym for
     unlimited; pass an explicit integer to bound the budget.
+
+    ``initial_delay`` must be strictly positive: a zero value disables
+    backoff entirely, and combined with ``max_attempts=None`` devolves into
+    a busy-spin on transient failures.
     """
 
     max_attempts: int | None = None
@@ -79,8 +83,11 @@ class RetryConfig:
                 raise ValueError(
                     "max_attempts must be None (unlimited) or >= 1; use 0 at the CLI/env boundary to mean unlimited"
                 )
-        if self.initial_delay < 0:
-            raise ValueError("initial_delay must be >= 0")
+        if self.initial_delay <= 0:
+            raise ValueError(
+                "initial_delay must be > 0; a zero (or negative) value disables backoff "
+                "and combined with max_attempts=None devolves into a busy-spin"
+            )
         if self.max_delay < self.initial_delay:
             raise ValueError("max_delay must be >= initial_delay")
         if not 0.0 <= self.jitter <= 1.0:

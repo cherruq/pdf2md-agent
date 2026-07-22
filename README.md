@@ -119,7 +119,7 @@ overrides the env value for the current invocation.
 | Variable | Default | Notes |
 |---|---|---|
 | `PDF2MD_AGENT_MAX_RETRIES` | `0` | Total LLM call attempts per page (initial + retries). `0` or unset = unlimited; positive integer = bounded budget. |
-| `PDF2MD_AGENT_RETRY_INITIAL_DELAY` | `1.0` | Initial retry delay in seconds (Fibonacci base unit). |
+| `PDF2MD_AGENT_RETRY_INITIAL_DELAY` | `1.0` | Initial retry delay in seconds (Fibonacci base unit). Must be `> 0`; zero or negative is rejected to avoid a busy-spin loop. |
 | `PDF2MD_AGENT_RETRY_MAX_DELAY` | `900.0` | Per-attempt delay cap (seconds). Fibonacci growth clamps at this ceiling. |
 | `PDF2MD_AGENT_RETRY_JITTER` | `0.25` | Jitter ratio in `[0.0, 1.0]`. |
 | `PDF2MD_AGENT_FALLBACK_TO_TEXT` | `true` | If `true`, fall back to the PDF's native text layer on retry exhaustion; if `false`, raise. |
