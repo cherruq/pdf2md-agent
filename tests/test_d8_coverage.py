@@ -380,9 +380,9 @@ def test_record_text_layer_fallback_writes_extract_and_format(tmp_path: Path) ->
     assert result.page_number == 1
     assert result.summary == "prior summary"
     assert "vision model unavailable" in result.markdown
-    # extract.txt is the canonical "this page was attempted but vision failed" marker.
-    assert artifacts.extract_text.read_text(encoding="utf-8") == ""
-    # format.md carries the recoverable fallback content.
+    extract_text = artifacts.extract_text.read_text(encoding="utf-8")
+    assert "vision model unavailable" in extract_text
+    assert "page 1" in extract_text
     assert "raw pdf text" in artifacts.format_markdown.read_text(encoding="utf-8")
 
 

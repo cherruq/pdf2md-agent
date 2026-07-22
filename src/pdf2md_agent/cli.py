@@ -176,6 +176,29 @@ def _safe_cache_stem(stem: str) -> str:
     return candidate
 
 
+def _cache_key_for_pdf(pdf: Path) -> str:
+    """Return a deterministic cache directory name for ``pdf``.
+
+    Uses the PDF's stem when it is short, free of path separators, and not
+    a Windows-reserved name. For long stems, names that contain ``/`` (e.g.
+    when the PDF lives under a deeply-nested tree), or Windows-reserved
+    stems on a Windows host, the cache key is a 16-character SHA-256
+    digest of the absolute PDF path — deterministic per file, never
+    collides between different absolute paths.
+    """
+    abs_path = pdf.resolve()
+    stem = _safe_cache_stem(abs_path.stem)
+    if (
+        0 < len(stem) <= 60
+        and "/" not in abs_path.stem
+        and "\\" not in abs_path.stem
+        and (sys.platform != "win32" or stem.upper() not in _WINDOWS_RESERVED_NAMES)
+    ):
+        return stem
+    import hashlib
+    return hashlib.sha256(str(abs_path).encode("utf-8")).hexdigest()[:16]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pdf2md-agent",
@@ -464,7 +487,7 @@ def _resolve_layout(
     is removed on context exit.
     """
     if keep_intermediates:
-        root = override if override is not None else Path(".pdf2md-agent-cache") / _safe_cache_stem(pdf.stem)
+        root = override if override is not None else Path(".pdf2md-agent-cache") / _cache_key_for_pdf(pdf)
         return CacheLayout.for_pdf(root, pdf), root / "pages"
 
     td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
@@ -695,6 +718,8 @@ def _run_pipeline(
             model=args.model,
             persona_version=args.persona_version,
         )
+        if not with_summary and layout.summary_path.exists():
+            layout.summary_path.unlink()
 
     log.info("rendering PDF to PNGs at %d dpi%s...", args.dpi, " (subset)" if resolved_pages else "")
     pages = _render_pages(

@@ -141,7 +141,10 @@ def _record_text_layer_fallback(
     completion_label: str,
 ) -> PageResult:
     format_md = _text_layer_fallback(artifacts)
-    artifacts.extract_text.write_text("", encoding="utf-8")
+    artifacts.extract_text.write_text(
+        _FALLBACK_SENTINEL.format(page=page_number),
+        encoding="utf-8",
+    )
     artifacts.format_markdown.write_text(format_md, encoding="utf-8")
     elapsed = time.monotonic() - page_started
     log.info(
@@ -154,6 +157,12 @@ def _record_text_layer_fallback(
         f"{len(format_md):,}",
     )
     return PageResult(page_number, format_md, summary)
+
+
+_FALLBACK_SENTINEL: str = (
+    "(vision model unavailable for page {page}; text-layer fallback emitted; "
+    "treat as sentinel — no extractor payload available)\n"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +231,7 @@ def run_pipeline(
     results: list[PageResult] = []
     pipeline_started = time.monotonic()
     total = len(pages)
+    fallback_pages: list[int] = []
     log.info(
         "pipeline started: pages=%d, dpi=%d, model=%s, persona=%s, "
         "with_summary=%s, no_cache=%s",
@@ -405,6 +415,7 @@ def run_pipeline(
                 summary=summary,
                 completion_label="validation-fallback",
             ))
+            fallback_pages.append(page.page_number)
             continue
         except BaseException as exc:
             if not fallback_to_text or not is_transient(exc):
@@ -426,6 +437,7 @@ def run_pipeline(
                 summary=summary,
                 completion_label="fallback",
             ))
+            fallback_pages.append(page.page_number)
             continue
 
         extract_text = _output(extract_t)
@@ -457,6 +469,13 @@ def run_pipeline(
         total_elapsed,
         total_elapsed / max(total, 1),
     )
+    if fallback_pages:
+        log.info(
+            "run complete: %d pages, %d used fallback (text layer): %s",
+            total,
+            len(fallback_pages),
+            fallback_pages,
+        )
     return results
 
 
