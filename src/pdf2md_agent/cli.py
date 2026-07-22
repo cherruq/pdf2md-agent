@@ -20,7 +20,6 @@ from pdf2md_agent.cache import (
     write_meta,
 )
 from pdf2md_agent.config import (
-    CTX_LIMIT,
     FALLBACK_TO_TEXT,
     IMAGE_JPEG_QUALITY,
     IMAGE_LONG_SIDE,
@@ -33,6 +32,7 @@ from pdf2md_agent.config import (
     RETRY_MAX_ATTEMPTS,
     RETRY_MAX_DELAY,
     TOKEN_BUDGET_SAFETY,
+    resolve_ctx_limit,
 )
 from pdf2md_agent.crew.agents import PERSONA_VERSION
 from pdf2md_agent.crew.runner import run_pipeline
@@ -409,7 +409,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TOK",
         help=(
             "Model context-window token limit the runner budgets against. "
-            "Used only when PDF2MD_AGENT_CTX_LIMIT is wrong. Default: 2013."
+            "Overrides PDF2MD_AGENT_CTX_LIMIT. Default: probed from "
+            "OPENAI_BASE_URL/models, or the hardcoded value for the "
+            "active model."
         ),
     )
     tuning.add_argument(
@@ -767,7 +769,7 @@ def _run_pipeline(
     image_long_side = args.image_long_side if args.image_long_side is not None else IMAGE_LONG_SIDE
     image_jpeg_quality = args.image_quality if args.image_quality is not None else IMAGE_JPEG_QUALITY
     max_summary_chars = args.max_summary_chars if args.max_summary_chars is not None else MAX_SUMMARY_CHARS
-    ctx_limit = args.ctx_limit if args.ctx_limit is not None else CTX_LIMIT
+    ctx_limit = args.ctx_limit if args.ctx_limit is not None else resolve_ctx_limit()
     log.info(
         "  budget:          ctx_limit=%d, safety=%.0f%%, image_long_side=%dpx, "
         "image_q=%d, max_summary=%d chars",

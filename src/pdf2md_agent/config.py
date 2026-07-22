@@ -1,10 +1,17 @@
 """Project configuration loaded from the environment at import time."""
 from __future__ import annotations
 
+import functools
+import logging
 import os
 from typing import Final
 
 from dotenv import load_dotenv
+
+from pdf2md_agent.ctx_probe import probe_ctx_limit
+
+
+log = logging.getLogger("pdf2md_agent.config")
 
 
 load_dotenv()
@@ -90,10 +97,79 @@ REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
 
 
 # --- Token-budget / image-downscale knobs -----------------------------------
-# MiniMax-M3 rejects payloads over ~2013 tokens; the 0.85 safety margin
-# keeps us off the cliff edge while a paginate is in flight.
+# ``resolve_ctx_limit`` consults env → ``/v1/models`` probe → hardcoded
+# default; the 0.85 safety margin keeps us off the cliff edge while a
+# paginate is in flight.
 
-CTX_LIMIT: Final[int] = _env_int("PDF2MD_AGENT_CTX_LIMIT", 2013)
+_MAX_CTX_LIMIT: Final[int] = 1_048_576  # 1M, the published MiniMax-M3 ceiling.
+_DEFAULT_CTX_LIMIT: Final[int] = 128_000  # safe fallback for unrecognised models.
+
+# Override by setting ``PDF2MD_AGENT_CTX_LIMIT`` or letting the runtime
+# probe succeed against ``OPENAI_BASE_URL``.
+_HARD_CODED_CTX_LIMITS: Final[dict[str, int]] = {
+    "MiniMax-M3": 524_288,  # 512K, the published guarantee.
+    "MiniMax-Text-01": 1_000_000,  # 1M ceiling, per the MSA spec sheet.
+    "MiniMax-VL-01": 524_288,
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4-turbo": 128_000,
+    "claude-3-5-sonnet-latest": 200_000,
+    "claude-3-opus-latest": 200_000,
+}
+
+
+@functools.lru_cache(maxsize=1)
+def resolve_ctx_limit() -> int:
+    """Resolve the model's context-window token budget.
+
+    Priority, highest first:
+
+    1. ``PDF2MD_AGENT_CTX_LIMIT`` env var (positive int)
+    2. ``probe_ctx_limit(OPENAI_BASE_URL, api_key, MODEL_NAME)`` clamped to
+       ``_MAX_CTX_LIMIT``; the probe is skipped entirely if
+       ``OPENAI_API_KEY`` is unset
+    3. Hardcoded default for the active ``MODEL_NAME``; falls back to
+       ``_DEFAULT_CTX_LIMIT`` if the model is unknown
+
+    Result is cached at module level; tests clear the cache via
+    ``resolve_ctx_limit.cache_clear()``.
+    """
+    raw = _env("PDF2MD_AGENT_CTX_LIMIT")
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                log.info(
+                    "ctx_limit: %d (from PDF2MD_AGENT_CTX_LIMIT env var)", value
+                )
+                return value
+        except ValueError:
+            pass  # fall through to probe; the caller should fix the typo
+
+    api_key = _env("OPENAI_API_KEY")
+    if api_key:
+        probed = probe_ctx_limit(OPENAI_BASE_URL, api_key, MODEL_NAME)
+        if probed is not None and probed > 0:
+            clamped = min(probed, _MAX_CTX_LIMIT)
+            log.info(
+                "ctx_limit: %d (probed from %s/models for %s)",
+                clamped, OPENAI_BASE_URL, MODEL_NAME,
+            )
+            return clamped
+
+    hardcoded = _HARD_CODED_CTX_LIMITS.get(MODEL_NAME)
+    if hardcoded is not None:
+        log.info("ctx_limit: %d (hardcoded for %s)", hardcoded, MODEL_NAME)
+        return hardcoded
+
+    log.warning(
+        "ctx_limit: %d (generic fallback; model %r is unknown — "
+        "set PDF2MD_AGENT_CTX_LIMIT to silence this warning)",
+        _DEFAULT_CTX_LIMIT, MODEL_NAME,
+    )
+    return _DEFAULT_CTX_LIMIT
+
+
 TOKEN_BUDGET_SAFETY: Final[float] = _env_float("PDF2MD_AGENT_TOKEN_BUDGET_SAFETY", 0.85)
 IMAGE_LONG_SIDE: Final[int] = _env_int("PDF2MD_AGENT_IMAGE_LONG_SIDE", 1536)
 IMAGE_JPEG_QUALITY: Final[int] = _env_int("PDF2MD_AGENT_IMAGE_JPEG_QUALITY", 85)

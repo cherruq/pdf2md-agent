@@ -26,12 +26,12 @@ from pdf2md_agent.cache import (
     write_summary,
 )
 from pdf2md_agent.config import (
-    CTX_LIMIT,
     IMAGE_JPEG_QUALITY,
     IMAGE_LONG_SIDE,
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
     MODEL_NAME,
+    resolve_ctx_limit,
     TOKEN_BUDGET_SAFETY,
 )
 from pdf2md_agent.crew.agents import (
@@ -184,7 +184,7 @@ def run_pipeline(
     llm: LLM,
     retry_config: RetryConfig | None = None,
     fallback_to_text: bool = True,
-    ctx_limit: int = CTX_LIMIT,
+    ctx_limit: int = 0,
     image_long_side: int = IMAGE_LONG_SIDE,
     image_min_long_side: int = IMAGE_MIN_LONG_SIDE,
     image_jpeg_quality: int = IMAGE_JPEG_QUALITY,
@@ -213,7 +213,13 @@ def run_pipeline(
 
     The remaining keyword arguments are the token-budget knobs (see
     :mod:`pdf2md_agent.config`). All have sensible defaults.
+
+    ``ctx_limit`` of 0 means "resolve at runtime" — the actual value comes
+    from :func:`pdf2md_agent.config.resolve_ctx_limit`, which consults the
+    env var, the ``/v1/models`` probe, and finally a hardcoded default.
     """
+    if ctx_limit <= 0:
+        ctx_limit = resolve_ctx_limit()
     extractor: Agent | None = None
     formatter = make_formatter(llm)
     summarizer: Agent | None = None

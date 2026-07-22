@@ -106,7 +106,7 @@ overrides the env value for the current invocation.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `PDF2MD_AGENT_CTX_LIMIT` | `2013` | Model context-window token limit the runner budgets against. |
+| `PDF2MD_AGENT_CTX_LIMIT` | _(auto)_ | Model context-window token limit. Unset ⇒ probed from `{OPENAI_BASE_URL}/models` (clamped to 1 048 576), or hardcoded for the active model if the probe fails. |
 | `PDF2MD_AGENT_TOKEN_BUDGET_SAFETY` | `0.85` | Fraction of `ctx_limit` the planner will spend per call. |
 | `PDF2MD_AGENT_IMAGE_LONG_SIDE` | `1536` | Long-side pixel cap for inlined page JPEGs. Lower ⇒ smaller payloads, worse OCR. |
 | `PDF2MD_AGENT_IMAGE_MIN_LONG_SIDE` | `768` | Lower bound for the binary search — never resize below this. |
@@ -192,7 +192,7 @@ pdf2md-agent PDF -o OUTPUT [options]
 | `--image-long-side` | int ≥ 64 | `1536` | Long-side cap (px) for inlined page JPEGs. |
 | `--image-quality` | int 1-100 | `85` | JPEG quality. 75-95 is the practical sweet spot. |
 | `--max-summary-chars` | int ≥ 100 | `800` | Running-summary character cap. |
-| `--ctx-limit` | int ≥ 256 | `2013` | Model context-window token limit. |
+| `--ctx-limit` | int ≥ 256 | _(auto)_ | Model context-window token limit. Overrides `PDF2MD_AGENT_CTX_LIMIT`. |
 | `--request-timeout` | float 0.1-600 | `60.0` | Per-attempt wall-clock timeout. |
 
 ### Diagnostic
@@ -347,14 +347,18 @@ auto-loads `.env` from the current working directory at import time.
 ### `400 context window exceeds limit` from the provider
 
 The token-budget planner already downsizes page images to stay under
-`PDF2MD_AGENT_CTX_LIMIT * PDF2MD_AGENT_TOKEN_BUDGET_SAFETY`. If you're still
-hitting the limit:
+`PDF2MD_AGENT_CTX_LIMIT * PDF2MD_AGENT_TOKEN_BUDGET_SAFETY`. The default
+limit is auto-detected at startup (probe `/v1/models` → hardcoded
+fallback per model). If you're still hitting the limit:
 
 - Lower `--image-long-side` (e.g. 1024) or `--image-quality` (e.g. 70).
 - Lower `--max-summary-chars` — the running summary is the largest
   variable token cost per call.
-- Raise `--ctx-limit` only if your endpoint actually has a larger window
-  than the default `2013`.
+- Check the startup log for the resolved `ctx_limit` value — the probe
+  only reads fields named `context_window` / `max_context_tokens` /
+  `max_input_tokens` / `context_length` / `max_tokens` /
+  `max_sequence_length`; if your provider uses a different field name,
+  set `PDF2MD_AGENT_CTX_LIMIT` explicitly.
 
 ### Output has gibberish or hallucinated content
 
