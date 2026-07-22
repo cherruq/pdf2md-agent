@@ -18,10 +18,13 @@ markdown from the PDF's native text layer (no vision model required).
 from __future__ import annotations
 
 import logging
-import random
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Callable, TypeVar
+
+# secrets.SystemRandom (vs random) so retry backoffs cannot sync across clients.
+_RNG = secrets.SystemRandom()
 
 from openai import (
     APIConnectionError,
@@ -32,12 +35,27 @@ from openai import (
 )
 
 
+def _safe_exc_summary(exc: BaseException) -> str:
+    """Return a redacted summary of ``exc`` safe to write to logs.
+
+    For ``APIStatusError`` we emit only the exception class name, HTTP
+    status code, and ``str(exc)`` (which is the OpenAI SDK's own
+    redacted message — it deliberately excludes ``exc.body``). This
+    prevents provider response payloads (which can contain user
+    content, internal stack traces, or other sensitive data) from
+    landing in log files.
+    """
+    if isinstance(exc, APIStatusError):
+        return f"{type(exc).__name__}: status={exc.status_code}: {exc}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 log = logging.getLogger("pdf2md_agent.llm_retry")
 
-T = TypeVar("T")
+T_co = TypeVar("T_co")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RetryConfig:
     """Bounded exponential-backoff retry policy.
 
@@ -89,12 +107,12 @@ def is_transient(exc: BaseException) -> bool:
 
 
 def call_with_retry(
-    fn: Callable[[], T],
+    fn: Callable[[], T_co],
     *,
     config: RetryConfig = RetryConfig(),
     label: str = "llm",
     sleep: Callable[[float], None] = time.sleep,
-) -> T:
+) -> T_co:
     """Call ``fn`` with bounded exponential-backoff retry on transient failures.
 
     The caller passes a zero-arg callable so each attempt is a fresh call
@@ -107,6 +125,12 @@ def call_with_retry(
     delay = config.initial_delay
     last_exc: Exception | None = None
     for attempt in range(1, config.max_attempts + 1):
+        log.info(
+            "%s: attempt %d/%d started",
+            label,
+            attempt,
+            config.max_attempts,
+        )
         try:
             return fn()
         except Exception as exc:  # noqa: BLE001 — predicate is `is_transient` below
@@ -115,26 +139,35 @@ def call_with_retry(
             last_exc = exc
             if attempt >= config.max_attempts:
                 log.error(
-                    "%s: giving up after %d attempt(s): %s: %s",
+                    "%s: giving up after %d attempt(s): %s",
                     label,
                     attempt,
-                    type(exc).__name__,
-                    exc,
+                    _safe_exc_summary(exc),
                 )
                 raise
-            jittered = delay * (1.0 + random.uniform(-config.jitter, config.jitter))
+            jittered = delay * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
             wait = max(0.0, min(jittered, config.max_delay))
-            log.warning(
-                "%s: transient %s on attempt %d/%d (%s); retrying in %.2fs",
+            log.info(
+                "%s: retrying after transient %s on attempt %d/%d (%s); "
+                "sleeping %.2fs",
                 label,
                 type(exc).__name__,
                 attempt,
                 config.max_attempts,
-                exc,
+                _safe_exc_summary(exc),
                 wait,
             )
             sleep(wait)
             delay = min(delay * config.backoff, config.max_delay)
-    # Unreachable: the loop always returns or raises.
-    assert last_exc is not None  # pragma: no cover
+    # Unreachable: the loop always returns or raises. Explicit guard for
+    # type-checkers and for `python -O` (asserts are stripped under -O).
+    if last_exc is None:
+        raise RuntimeError("unreachable: retry loop must set last_exc")
     raise last_exc  # pragma: no cover
+
+
+__all__ = [
+    "RetryConfig",
+    "call_with_retry",
+    "is_transient",
+]

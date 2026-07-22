@@ -30,6 +30,7 @@ from pdf2md_agent.config import (
     IMAGE_LONG_SIDE,
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
+    MODEL_NAME,
     TOKEN_BUDGET_SAFETY,
 )
 from pdf2md_agent.crew.agents import EXTRACTOR_BACKSTORY, make_extractor, make_formatter, make_summarizer
@@ -42,7 +43,7 @@ from pdf2md_agent.crew.tasks import (
     make_format_task_from_extract_file,
     make_summarize_task,
 )
-from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient
+from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient, _safe_exc_summary
 from pdf2md_agent.pdf_renderer import PageImage, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.render_pdf` without `create=True`
 from pdf2md_agent.token_budget import (
     estimate_image_tokens,
@@ -55,7 +56,7 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 _THINK_OPEN = chr(60) + "think" + chr(62)
 _THINK_CLOSE = chr(60) + "/think" + chr(62)
-_THINK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
+_THINK_BLOCK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
 
 
 def _strip_think(text: str) -> str:
@@ -65,12 +66,12 @@ def _strip_think(text: str) -> str:
     MiniMax-M3 endpoint sometimes leaves them in the response. Strip them
     defensively before downstream consumers see them.
     """
-    return _THINK_RE.sub("", text).strip()
+    return _THINK_BLOCK_RE.sub("", text).strip()
 
 
-def _output(task) -> str:
+def _output(output_text: object) -> str:
     """Extract clean text from a CrewAI task's output."""
-    out = getattr(task, "output", None)
+    out = getattr(output_text, "output", None)
     if out is None:
         return ""
     raw = getattr(out, "raw", None)
@@ -78,7 +79,7 @@ def _output(task) -> str:
     return _strip_think(text)
 
 
-def _text_layer_fallback(artifacts) -> str:
+def _text_layer_fallback(artifacts: PageArtifacts) -> str:
     """Build a best-effort markdown page from the PDF's native text layer.
 
     Used when the vision model is unreachable after all retries. The page's
@@ -128,7 +129,7 @@ def _record_text_layer_fallback(
     total: int,
     page_number: int,
     page_started: float,
-    artifacts,
+    artifacts: PageArtifacts,
     summary: str,
     completion_label: str,
 ) -> PageResult:
@@ -174,6 +175,7 @@ def run_pipeline(
     max_summary_chars: int = MAX_SUMMARY_CHARS,
     token_budget_safety: float = TOKEN_BUDGET_SAFETY,
     reformat: bool = False,
+    dpi: int = 144,
 ) -> list[PageResult]:
     """Run the per-page CrewAI pipeline across ``pages`` and return page results.
 
@@ -218,7 +220,21 @@ def run_pipeline(
     results: list[PageResult] = []
     pipeline_started = time.monotonic()
     total = len(pages)
+    log.info(
+        "pipeline started: pages=%d, dpi=%d, model=%s, with_summary=%s, "
+        "resume=%s, reformat=%s",
+        total,
+        dpi,
+        MODEL_NAME,
+        with_summary,
+        resume,
+        reformat,
+    )
     phases = "extract + format + summarize" if with_summary else "extract + format"
+    # Fast-path aliases for the layout's hot ``Path`` attributes so the
+    # per-page loop avoids a repeated attribute lookup on ``layout``.
+    pages_dir = layout.pages_dir
+    summary_path = layout.summary_path
 
     extractor_persona_text = EXTRACTOR_BACKSTORY
 
@@ -249,7 +265,7 @@ def run_pipeline(
                 page_number=page.page_number,
                 artifacts=artifacts,
                 summary_in=summary,
-                summary_path=layout.summary_path,
+                summary_path=summary_path,
                 with_summary=with_summary,
                 llm=llm,
                 retry_config=retry_config,
@@ -336,7 +352,7 @@ def run_pipeline(
         )
         if needs_resize:
             if not resized_path.is_file():
-                layout.pages_dir.mkdir(parents=True, exist_ok=True)
+                pages_dir.mkdir(parents=True, exist_ok=True)
                 _resize_page_png(
                     page.image_path,
                     resized_path,
@@ -382,7 +398,7 @@ def run_pipeline(
         except ValidationError as exc:
             if not fallback_to_text:
                 raise
-            log.error(
+            log.warning(
                 "  [%d/%d] page %d: model returned malformed response "
                 "(%s, %d validation error(s)); falling back to text layer",
                 idx,
@@ -404,12 +420,13 @@ def run_pipeline(
         except BaseException as exc:
             if not fallback_to_text or not is_transient(exc):
                 raise
-            log.error(
-                "  [%d/%d] page %d: vision pipeline failed after retries; "
+            log.warning(
+                "  [%d/%d] page %d: vision pipeline failed after retries (%s); "
                 "falling back to text layer",
                 idx,
                 total,
                 page.page_number,
+                _safe_exc_summary(exc),
             )
             results.append(_record_text_layer_fallback(
                 idx=idx,
@@ -431,7 +448,7 @@ def run_pipeline(
             summary = _output(summarize_t)
             if len(summary) > max_summary_chars:
                 summary = _truncate_summary(summary, max_summary_chars)
-            write_summary(layout.summary_path, summary)
+            write_summary(summary_path, summary)
 
         elapsed = time.monotonic() - page_started
         log.info(
@@ -515,7 +532,7 @@ def _run_format_summarize_only(
     except ValidationError:
         if not fallback_to_text:
             raise
-        log.error(
+        log.warning(
             "  page %d: reformat produced malformed output; writing extract.txt as-is",
             page_number,
         )
@@ -525,9 +542,10 @@ def _run_format_summarize_only(
     except BaseException as exc:
         if not fallback_to_text or not is_transient(exc):
             raise
-        log.error(
-            "  page %d: reformat failed after retries; writing extract.txt as-is",
+        log.warning(
+            "  page %d: reformat failed after retries (%s); writing extract.txt as-is",
             page_number,
+            _safe_exc_summary(exc),
         )
         format_md = artifacts.extract_text.read_text(encoding="utf-8")
         summary_out = summary_in
@@ -541,3 +559,12 @@ def _run_format_summarize_only(
         write_summary(summary_path, summary_out)
 
     return format_md, summary_out, did_fallback
+
+
+__all__ = [
+    "PageImage",  # re-exported from pdf2md_agent.pdf_renderer
+    "PageResult",
+    "make_vision_llm",  # re-exported from pdf2md_agent.vision
+    "render_pdf",  # re-exported from pdf2md_agent.pdf_renderer
+    "run_pipeline",
+]

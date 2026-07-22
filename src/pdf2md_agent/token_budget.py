@@ -169,24 +169,50 @@ def _est_size_at_long_side(
     return max(1024, int(orig_bytes * scale_sq))
 
 
-def _open_for_size(path: Path) -> tuple[int, int]:
+def _bytes_to_fallback_size(num_bytes: int) -> tuple[int, int]:
+    """Estimate ``(long_side, long_side)`` from a JPEG byte count.
+
+    Heuristic: a quality-85 JPEG compresses to roughly 0.25 bytes/pixel
+    (≈ 4 pixels/byte), so a square image has ``long_side ≈ sqrt(bytes * 4)``
+    ≈ ``2 * sqrt(bytes)``. Floored at 256 px so a 0-byte / tiny file still
+    produces a sane size rather than 0, which the binary search would
+    reject with ``orig_long_side <= min_long_side``.
+    """
+    if num_bytes <= 0:
+        return 256, 256
+    side = max(256, int(2 * math.sqrt(num_bytes)))
+    return side, side
+
+
+def _open_for_size(path: Path, *, fallback_bytes: int) -> tuple[int, int]:
     """Return ``(width, height)`` of ``path`` using Pillow.
 
-    Falls back to (1, 1) if Pillow cannot open the file so the rest of the
-    planner still produces a sane (if useless) result instead of raising
-    into the pipeline.
+    Falls back to a byte-derived estimate when Pillow cannot open the
+    file. Without this fallback the planner would treat the corrupt
+    image as 1×1, conclude it already fits the budget, and inline the
+    raw oversized blob to the LLM (D6-007). ``fallback_bytes`` is the
+    ``Path.stat().st_size`` cached by the caller, so the estimate
+    reflects how much data the corrupt blob actually contains.
     """
     try:
         from PIL import Image  # type: ignore[import-not-found]
     except Exception:  # pragma: no cover - Pillow is a hard project dep
-        log.warning("Pillow not importable in plan_for_image; using 1x1 fallback")
-        return 1, 1
+        log.warning(
+            "Pillow not importable in plan_for_image; using bytes-based "
+            "fallback (%d bytes) for %s",
+            fallback_bytes, path,
+        )
+        return _bytes_to_fallback_size(fallback_bytes)
     try:
         with Image.open(path) as img:
             return img.size  # (width, height)
     except Exception as exc:
-        log.warning("plan_for_image: cannot open %s to read size (%s)", path, exc)
-        return 1, 1
+        log.warning(
+            "plan_for_image: cannot open %s to read size (%s); using "
+            "bytes-based fallback (%d bytes) to keep planner sizing sane",
+            path, exc, fallback_bytes,
+        )
+        return _bytes_to_fallback_size(fallback_bytes)
 
 
 def plan_for_image(
@@ -248,10 +274,16 @@ def plan_for_image(
 
     limit = int(ctx_limit * safety)
     budget_for_image = max(0, limit - persona_tokens - fixed_text_tokens)
-    current_tokens = estimate_image_tokens(image_path)
-    original_bytes = (
-        image_path.stat().st_size if image_path.is_file() else 0
-    )
+    # Stat the file exactly once and derive both ``original_bytes`` and
+    # ``current_tokens`` from the cached size — avoids the double
+    # ``Path.stat()`` (one hidden inside ``estimate_image_tokens``) and
+    # the redundant ``is_file()`` probe on the same path.
+    try:
+        size = image_path.stat().st_size
+    except OSError:
+        size = 0
+    original_bytes = size
+    current_tokens = _tokens_for_size(size) if size > 0 else 0
 
     if current_tokens <= budget_for_image:
         # Already fits — recommend the standard target size for consistency.
@@ -266,7 +298,7 @@ def plan_for_image(
 
     # Need to downscale. Find the LARGEST long_side whose estimated tokens
     # stay under budget_for_image, via integer binary search.
-    orig_w, orig_h = _open_for_size(image_path)
+    orig_w, orig_h = _open_for_size(image_path, fallback_bytes=original_bytes)
     orig_long_side = max(orig_w, orig_h)
 
     if orig_long_side <= min_long_side:

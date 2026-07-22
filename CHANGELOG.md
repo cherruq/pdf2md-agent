@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Cross-page stitching post-processor (`pdf2md_agent.post_stream`) that merges paragraphs, list items, and table rows split across page boundaries, and drops the `\n\n---\n\n` page separator by default. Opt out with `--stitch-mode off` to restore the legacy separator. Default mode is heuristic (no extra LLM calls).
+- Hierarchical `AGENTS.md` knowledge base at the repository root and under `src/pdf2md_agent/` (subpackage + `crew/` sub-subpackage) — non-generic, project-specific: conventions, anti-patterns, code map.
+- `.env.example` now documents all 14 `PDF2MD_AGENT_*` knobs (was: only `OPENAI_BASE_URL` + `OPENAI_API_KEY`).
 
 ### Changed
 - Generalised project description for public distribution (LLM-agnostic: defaults to MiniMax-M3 but any OpenAI-compatible vision endpoint works via `OPENAI_BASE_URL`).
 - Internal design documents removed from version control.
+- Quality refactor: empty-PDF / over-large page-range guards; sanitised output path for Windows reserved names / symlinks / path-traversal; `.env.example` documentation gap closed; `RetryConfig` + `_Fragment` dataclasses now `slots=True`; `post_stream` regex hoisted to module level; double `Path.stat()` in `token_budget` reduced to single call; task factory return types annotated; TypeVar in `llm_retry` no longer shadows builtin `type`; `_output()` parameter renamed; `_no_fallback_to_text` argparse flag normalised to `store_true`; atomic-write helper extracted and re-used in `cache.py`; corrected log levels (transient retries → `info`, graceful fallback → `warning`); empty/corrupt image and corrupt summary handled gracefully instead of silently swallowed; `APIStatusError` logged without leaking response body; `runner._strip_think` regex hoisted; per-page `mkdir` deduplicated.
 
 ## [0.2.0] — 2026-07-17
 

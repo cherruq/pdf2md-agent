@@ -38,6 +38,16 @@ def test_parse_rejects_bad_input(bad: str) -> None:
         parse_page_spec(bad)
 
 
+def test_parse_rejects_oversized_range() -> None:
+    """Rejects ``1-N`` ranges whose span exceeds the DoS guard.
+
+    Guards against a malicious or mistyped ``--pages 1-99999`` allocating
+    a 100k-entry list before ``resolve_pages`` ever sees it.
+    """
+    with pytest.raises(argparse.ArgumentTypeError, match=r"exceeds"):
+        parse_page_spec("1-99999")
+
+
 # --- resolve_pages -----------------------------------------------------------
 
 def test_resolve_sorts_and_dedupes() -> None:

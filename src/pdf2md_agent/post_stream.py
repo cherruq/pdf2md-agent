@@ -95,7 +95,7 @@ _BLOCK_SEPARATOR = "\n\n"
 """Blank-line separator between confirmed blocks in stitched output."""
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class _Fragment:
     """One chunk the stitcher is holding or about to yield."""
 
@@ -192,6 +192,11 @@ _BLOCK_START = re.compile(
 _TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
 """A markdown table separator row (e.g. ``|---|---|``)."""
 
+_BLANK_LINE_RE = re.compile(r"\n\s*\n")
+"""Blank-line boundary used by :func:`_split_into_blocks`; hoisted to
+module scope so the pattern is compiled exactly once per process instead of
+on every per-page call."""
+
 
 def _split_into_blocks(page_md: str) -> list[str]:
     """Split a page's markdown into top-level blocks.
@@ -207,7 +212,7 @@ def _split_into_blocks(page_md: str) -> list[str]:
     Blank lines separate blocks.
     """
     # First normalize: split on blank-line boundaries.
-    chunks = re.split(r"\n\s*\n", page_md)
+    chunks = _BLANK_LINE_RE.split(page_md)
     blocks: list[str] = []
     for chunk in chunks:
         chunk = chunk.strip("\n")

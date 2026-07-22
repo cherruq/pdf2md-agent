@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 import tempfile
 import time
@@ -11,7 +10,7 @@ import time
 import pymupdf
 from pathlib import Path
 
-from pdf2md_agent.cache import CacheLayout, write_meta
+from pdf2md_agent.cache import CacheLayout, atomic_write_text, write_meta
 from pdf2md_agent.config import (
     CTX_LIMIT,
     FALLBACK_TO_TEXT,
@@ -34,6 +33,60 @@ from pdf2md_agent.post_stream import StitchMode, stitch_pages
 from pdf2md_agent.vision import make_vision_llm
 
 log = logging.getLogger("pdf2md-agent")
+
+
+def _safe_intermediates_dir(value: str) -> Path:
+    """argparse ``type=`` for ``--intermediates-dir``.
+
+    Rejects values that contain ``..`` path segments so a malicious or
+    mistaken flag cannot point the cache directory outside the working
+    tree (path-traversal guard, D11-N02).
+    """
+    p = Path(value)
+    if any(part == ".." for part in p.parts):
+        raise argparse.ArgumentTypeError(
+            f"--intermediates-dir must not contain '..' segments: {value!r}"
+        )
+    return p
+
+
+# Windows reserved device names. ``CreateFile`` rejects these as bare
+# filenames (with or without an extension), and ``mkdir`` on a reserved
+# name surfaces as an opaque OSError. ``CON``, ``PRN``, ``AUX``, ``NUL``
+# plus ``COM1``-``COM9`` and ``LPT1``-``LPT9``. Case-insensitive on Windows.
+_WINDOWS_RESERVED_NAMES: frozenset[str] = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def _safe_cache_stem(stem: str) -> str:
+    """Return a filesystem-safe cache directory name derived from ``stem``.
+
+    On Windows, the bare filenames ``CON``, ``PRN``, ``AUX``, ``NUL``,
+    ``COM1``-``COM9``, and ``LPT1``-``LPT9`` are reserved device names and
+    cannot be used as a directory name — ``mkdir`` on ``.pdf2md-agent-cache/CON``
+    fails with an opaque OSError. Trailing dots / spaces and leading
+    whitespace are likewise rejected. We append a single ``_`` so the
+    cache lives at ``<reserved>_`` instead of crashing the run.
+
+    On non-Windows platforms the reservation does not apply; we still
+    strip trailing dots/spaces defensively for portability.
+
+    Case-collision (D16-002): on case-insensitive filesystems (NTFS,
+    APFS, HFS+) two PDFs whose stems differ only in case map to the
+    same cache directory. We do not canonicalize here — instead, callers
+    are warned via this function's docstring to pick distinct stems.
+    """
+    if not stem:
+        return "_"
+    candidate = stem.rstrip(" .")
+    if not candidate:
+        return "_"
+    if sys.platform == "win32" and candidate.upper() in _WINDOWS_RESERVED_NAMES:
+        return candidate + "_"
+    return candidate
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--intermediates-dir",
-        type=Path,
+        type=_safe_intermediates_dir,
         default=None,
         help="Override the intermediates cache directory (default: .pdf2md-agent-cache/<pdf_stem>/).",
     )
@@ -150,9 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--no-fallback-to-text",
-        action="store_false",
-        dest="fallback_to_text",
-        default=None,
+        action="store_true",
+        default=False,
+        dest="no_fallback_to_text",
         help=(
             "On retry exhaustion, raise instead of falling back to the PDF's "
             "native text layer. Default: fallback enabled."
@@ -229,7 +282,7 @@ def _resolve_layout(
     is removed on context exit.
     """
     if keep_intermediates:
-        root = override if override is not None else Path(".pdf2md-agent-cache") / pdf.stem
+        root = override if override is not None else Path(".pdf2md-agent-cache") / _safe_cache_stem(pdf.stem)
         return CacheLayout.for_pdf(root, pdf), root / "pages"
 
     td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
@@ -246,36 +299,7 @@ def _resolve_layout(
     )
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` via a sibling temp file + ``os.replace``.
-
-    A crash mid-write leaves the original file (if any) intact instead of
-    producing a truncated output. The temp file uses a randomized suffix and
-    lives in the same directory as ``path`` so ``os.replace`` is atomic on
-    POSIX and Windows alike.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-        delete=False,
-        mode="w",
-        encoding="utf-8",
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-        try:
-            tmp.write(content)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
-    try:
-        os.replace(tmp_path, path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+_atomic_write_text = atomic_write_text
 
 
 def _build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
@@ -311,12 +335,27 @@ def cmd_convert(args: argparse.Namespace) -> int:
     retry_config = _build_retry_config(args)
     if retry_config is None:
         return 1
-    fallback_to_text = (
-        args.fallback_to_text if args.fallback_to_text is not None else FALLBACK_TO_TEXT
-    )
+    fallback_to_text = FALLBACK_TO_TEXT and not args.no_fallback_to_text
 
     if not args.pdf.exists():
         print(f"error: input PDF not found: {args.pdf}", file=sys.stderr)
+        return 1
+
+    # D10-N04: fail fast on non-PDF input before any tempdir/cache work.
+    try:
+        with args.pdf.open("rb") as _pdf_header_fh:
+            _pdf_header = _pdf_header_fh.read(5)
+    except OSError as _pdf_header_exc:
+        print(
+            f"error: cannot read input PDF {args.pdf}: {_pdf_header_exc}",
+            file=sys.stderr,
+        )
+        return 1
+    if not _pdf_header.startswith(b"%PDF-"):
+        print(
+            f"error: input file is not a PDF (missing %PDF- header): {args.pdf}",
+            file=sys.stderr,
+        )
         return 1
 
     started = time.monotonic()
@@ -337,6 +376,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
             return 1
         finally:
             doc.close()
+
+    # Defensive empty-pages guard: ``resolve_pages`` raises on a 0-page
+    # PDF, so reaching here implies ``--pages`` filtered everything out.
+    if args.pages is not None and not resolved_pages:
+        print("ERROR: PDF has no pages to process.", file=sys.stderr)
+        raise SystemExit(1)
 
     if args.reformat and args.no_intermediates:
         print(

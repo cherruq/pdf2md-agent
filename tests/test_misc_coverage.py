@@ -10,11 +10,14 @@ import pytest
 
 from pdf2md_agent import cli
 from pdf2md_agent.cache import (
+    CacheCorruptedError,
     CacheLayout,
     is_page_complete,
     read_summary,
     write_summary,
 )
+from pdf2md_agent.cli import _atomic_write_text, _safe_cache_stem, _safe_intermediates_dir
+from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
 from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
 
@@ -74,19 +77,21 @@ def test_read_write_summary_round_trip(tmp_path: Path) -> None:
     assert read_summary(path) == "running sum text 中文"
 
 
-def test_read_summary_corrupt_returns_empty(tmp_path: Path, caplog) -> None:
+def test_read_summary_corrupt_raises_and_warns(tmp_path: Path, caplog) -> None:
     path = tmp_path / "summary.json"
     path.write_text("{not json", encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
-        assert read_summary(path) == ""
+        with pytest.raises(CacheCorruptedError):
+            read_summary(path)
     assert any("unreadable" in rec.message for rec in caplog.records)
 
 
-def test_read_summary_wrong_shape_returns_empty(tmp_path: Path, caplog) -> None:
+def test_read_summary_wrong_shape_raises_and_warns(tmp_path: Path, caplog) -> None:
     path = tmp_path / "summary.json"
     path.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
     with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
-        assert read_summary(path) == ""
+        with pytest.raises(CacheCorruptedError):
+            read_summary(path)
     assert any("not a JSON object" in rec.message for rec in caplog.records)
 
 
@@ -150,7 +155,7 @@ def test_cli_parse_known_args() -> None:
     assert args.no_intermediates is False
     assert args.no_summary is False
     assert args.no_text_hint is False
-    assert args.fallback_to_text is None  # default until env fallback
+    assert args.no_fallback_to_text is False  # default — env may still override
 
 
 def test_cli_parse_pages_spec() -> None:
@@ -170,3 +175,92 @@ def test_cli_main_missing_pdf_returns_1(capsys) -> None:
     assert rc == 1
     err = capsys.readouterr().err
     assert "input PDF not found" in err
+
+
+def test_encode_local_image_non_image_raises_image_encode_error(tmp_path: Path) -> None:
+    bogus = tmp_path / "fake.jpg"
+    bogus.write_text("not an image", encoding="utf-8")
+    with pytest.raises(ImageEncodeError):
+        _encode_local_image(bogus, target_long_side=1536, jpeg_quality=85)
+
+
+# --- _atomic_write_text (D11-N01) ------------------------------------------
+
+
+def test_atomic_write_round_trip(tmp_path: Path) -> None:
+    p = tmp_path / "out.md"
+    _atomic_write_text(p, "hello world")
+    assert p.read_text(encoding="utf-8") == "hello world"
+
+
+def test_atomic_write_creates_parent(tmp_path: Path) -> None:
+    p = tmp_path / "nested" / "out.md"
+    _atomic_write_text(p, "data")
+    assert p.read_text(encoding="utf-8") == "data"
+
+
+def test_atomic_write_mode_is_0o600_on_posix(tmp_path: Path) -> None:
+    """Verifies the new os.open(..., 0o600) path is exercised (D11-N01)."""
+    import os
+    p = tmp_path / "out.md"
+    _atomic_write_text(p, "new")
+    mode = os.stat(p).st_mode & 0o777
+    assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+
+# --- _safe_intermediates_dir (D11-N02 / D10-N03) --------------------------
+
+
+def test_safe_intermediates_dir_accepts_normal_path() -> None:
+    from pathlib import Path
+    result = _safe_intermediates_dir("out/cache")
+    assert isinstance(result, Path)
+
+
+def test_safe_intermediates_dir_rejects_dotdot() -> None:
+    import argparse
+    with pytest.raises(argparse.ArgumentTypeError, match=r"\.\."):
+        _safe_intermediates_dir("foo/../etc")
+
+
+def test_cli_parse_rejects_traversal_intermediates_dir() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args([
+            "in.pdf", "-o", "x.md",
+            "--intermediates-dir", "../escape",
+        ])
+
+
+# --- _safe_cache_stem (D16-001 / D16-002 / D16-003) -----------------------
+
+
+def test_safe_cache_stem_regular_passthrough() -> None:
+    assert _safe_cache_stem("report") == "report"
+    assert _safe_cache_stem("annual-2026") == "annual-2026"
+
+
+def test_safe_cache_stem_strips_trailing_dot_or_space() -> None:
+    assert _safe_cache_stem("trailing.") == "trailing"
+    assert _safe_cache_stem("trailing. ") == "trailing"
+
+
+def test_safe_cache_stem_empty_returns_underscore() -> None:
+    assert _safe_cache_stem("") == "_"
+    assert _safe_cache_stem("...") == "_"
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform != "win32",
+    reason="reserved-name suffix is Windows-only behaviour",
+)
+def test_safe_cache_stem_reserved_name_on_windows() -> None:
+    assert _safe_cache_stem("CON") == "CON_"
+    assert _safe_cache_stem("nul") == "nul_"
+    assert _safe_cache_stem("COM1") == "COM1_"
+
+
+def test_safe_cache_stem_no_suffix_off_windows() -> None:
+    if __import__("sys").platform == "win32":
+        pytest.skip("non-windows variant")
+    assert _safe_cache_stem("CON") == "CON"
