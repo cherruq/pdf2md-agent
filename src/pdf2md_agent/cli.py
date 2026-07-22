@@ -35,8 +35,13 @@ from pdf2md_agent.crew.agents import PERSONA_VERSION
 from pdf2md_agent.crew.runner import run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec, resolve_pages
-from pdf2md_agent.pdf_renderer import render_pdf
+from PIL import Image
+
+from pdf2md_agent.pdf_renderer import PageImage, render_pdf
 from pdf2md_agent.post_stream import StitchMode, stitch_pages
+from pdf2md_agent.render_skip import (
+    maybe_skip_render as _maybe_skip_render,
+)
 from pdf2md_agent.vision import make_vision_llm
 
 log = logging.getLogger("pdf2md-agent")
@@ -497,6 +502,64 @@ def cmd_convert(args: argparse.Namespace) -> int:
         )
 
 
+def _render_pages(
+    *,
+    pdf: Path,
+    render_target: Path,
+    dpi: int,
+    resolved_pages: list[int] | None,
+    keep_intermediates: bool,
+    no_cache_render: bool,
+    no_cache_text: bool,
+) -> list[PageImage]:
+    """Render the PDF, optionally reusing per-page PNG/text cache.
+
+    When ``keep_intermediates`` is True and the no-cache flags are unset,
+    pages whose PNG/text are already on disk are returned without touching
+    PyMuPDF — that's the trust-cache fast path. With either flag set, the
+    pipeline always re-renders / re-extracts.
+    """
+    if not keep_intermediates or no_cache_render or no_cache_text:
+        return render_pdf(pdf, render_target, dpi=dpi, pages=resolved_pages)
+
+    from pdf2md_agent.cache import CacheLayout
+    layout = CacheLayout(
+        root=render_target.parent,
+        pages_dir=render_target,
+        summary_path=render_target.parent / "summary.json",
+        meta_path=render_target.parent / "meta.json",
+    )
+
+    target_pages: list[int] = (
+        list(resolved_pages) if resolved_pages is not None
+        else list(range(1, _pdf_page_count(pdf) + 1))
+    )
+    missing: list[int] = [
+        n for n in target_pages if _maybe_skip_render(layout, n, dpi) is None
+    ]
+    if missing:
+        render_pdf(pdf, render_target, dpi=dpi, pages=missing)
+    pages: list[PageImage] = []
+    for n in target_pages:
+        png = layout.page_png_path(n)
+        with Image.open(png) as img:
+            pages.append(PageImage(
+                page_number=n,
+                width=img.width,
+                height=img.height,
+                image_path=png,
+            ))
+    return pages
+
+
+def _pdf_page_count(pdf: Path) -> int:
+    doc = pymupdf.open(pdf)
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
+
+
 def _run_pipeline(
     *,
     args: argparse.Namespace,
@@ -531,7 +594,15 @@ def _run_pipeline(
         )
 
     log.info("rendering PDF to PNGs at %d dpi%s...", args.dpi, " (subset)" if resolved_pages else "")
-    pages = render_pdf(args.pdf, render_target, dpi=args.dpi, pages=resolved_pages)
+    pages = _render_pages(
+        pdf=args.pdf,
+        render_target=render_target,
+        dpi=args.dpi,
+        resolved_pages=resolved_pages,
+        keep_intermediates=keep_intermediates,
+        no_cache_render=no_cache.render,
+        no_cache_text=no_cache.text,
+    )
     log.info("rendered %d page(s) to %s", len(pages), render_target)
 
     log.info("running pipeline: extract + format%s", " + summarize" if with_summary else "")

@@ -172,11 +172,17 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """End-to-end: synthesize PDF, mock LLM + render + crew + stitch, verify output."""
+    monkeypatch.chdir(tmp_path)
     pdf = _make_onepage_pdf(tmp_path / "in.pdf")
     args = _build_minimal_args(tmp_path, pdf)
 
+    from PIL import Image
+    pages_dir = tmp_path / ".pdf2md-agent-cache" / "in" / "pages"
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    png_path = pages_dir / "page_0001.png"
+    Image.new("RGB", (72, 72), "white").save(png_path, "PNG")
     page = PageImage(
-        page_number=1, width=72, height=72, image_path=tmp_path / "page_0001.png",
+        page_number=1, width=72, height=72, image_path=png_path,
     )
 
     with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
@@ -191,18 +197,19 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     assert rc == 0
     out = args.output
     assert out.read_text(encoding="utf-8") == "# Title\n\n- item\n"
-    # meta.json was emitted (intermediates kept by default)
     assert mock_write_meta.called
-    # every stage got called exactly once
-    assert mock_render.call_count == 1
     assert mock_run.call_count == 1
     assert mock_stitch.call_count == 1
+    assert mock_render.call_count == 0, (
+        "trust-cache path must not re-render when PNG already on disk"
+    )
 
 
 def test_cmd_convert_no_intermediates_does_not_emit_meta(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--no-intermediates`` short-circuits meta.json emission (tempdir-only cache)."""
+    monkeypatch.chdir(tmp_path)
     pdf = _make_onepage_pdf(tmp_path / "in.pdf")
     args = _build_minimal_args(tmp_path, pdf)
     args.no_intermediates = True
@@ -271,6 +278,9 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
          patch.object(cli, "stitch_pages", return_value="stitched body") as mock_stitch, \
          patch.object(cli, "_atomic_write_text") as mock_atomic, \
          patch.object(cli, "write_meta"):
+        layout.pages_dir.mkdir(parents=True, exist_ok=True)
+        from PIL import Image as _PIL
+        _PIL.new("RGB", (72, 72), "white").save(layout.pages_dir / "page_0001.png", "PNG")
         from pdf2md_agent.cache import CacheNoCacheFlags
         rc = cli._run_pipeline(
             args=args,
@@ -289,12 +299,9 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
 
     assert rc == 0
     assert mock_atomic.call_count == 1
-    # The atomic write must have been called with the stitched markdown and the
-    # user-supplied output path — never a Path.write_text() shortcut.
     written_path, written_text = mock_atomic.call_args.args
     assert written_path == out_path
     assert written_text == "stitched body"
-    assert mock_render.called
     assert mock_stitch.called
 
 
