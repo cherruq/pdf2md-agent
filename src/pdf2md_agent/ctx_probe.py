@@ -19,13 +19,14 @@ import json
 import logging
 import urllib.error
 from typing import Any, Final
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
 log = logging.getLogger("pdf2md_agent.ctx_probe")
 
 
-_MAX_CTX_LIMIT: Final[int] = 1_048_576  # 1M, the published MiniMax-M3 ceiling.
+_MAX_CTX_LIMIT: Final[int] = 1_048_576  # 1M defensive upper bound (MiniMax-Text-01 ceiling per the MSA spec sheet; MiniMax-M3 itself is 512K).
 
 
 _CTX_FIELD_CANDIDATES: Final[tuple[str, ...]] = (
@@ -67,12 +68,16 @@ def probe_ctx_limit(
     source of truth.
     """
     url = base_url.rstrip("/") + "/models"
-    req = Request(
+    # Guard against a misconfigured OPENAI_BASE_URL pointing at file:// etc.
+    if urlparse(url).scheme not in {"http", "https"}:
+        log.debug("probe_ctx_limit: refusing non-HTTP scheme in %s", url)
+        return None
+    req = Request(  # noqa: S310  # scheme pre-validated above
         url,
         headers={"Authorization": f"Bearer {api_key}"},
     )
     try:
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout) as resp:  # noqa: S310  # scheme pre-validated above
             payload = json.loads(resp.read().decode("utf-8"))
     except (
         urllib.error.URLError,

@@ -178,3 +178,13 @@ def test_probe_strips_trailing_slash_from_base_url() -> None:
     # No doubled slash; ``/models`` suffix present exactly once.
     assert "//" not in called_url.replace("https://", "")
     assert called_url.endswith("/models")
+
+
+@pytest.mark.parametrize("scheme", ["file", "ftp", "javascript"])
+def test_probe_rejects_non_http_schemes(scheme: str) -> None:
+    """A misconfigured ``OPENAI_BASE_URL`` (e.g. ``file:///etc/passwd``)
+    must not result in a local file read or arbitrary protocol dial.
+    """
+    with patch("pdf2md_agent.ctx_probe.urlopen") as mock_urlopen:
+        assert probe_ctx_limit(f"{scheme}://evil.example/models", "k", "m") is None
+    mock_urlopen.assert_not_called()

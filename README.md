@@ -13,9 +13,11 @@ It is designed to be robust on adversarial inputs:
 
 - **Token-budgeted** — every per-page call is sized (and the page image
   downscaled) to stay under the model's context window.
-- **Retry-aware** — transient API failures retry with exponential backoff
-  + jitter; on retry exhaustion the page falls back to the PDF's native
-  text layer (with a clearly-marked stub) instead of crashing the run.
+- **Retry-aware** — transient API failures retry with Fibonacci backoff
+  (1, 1, 2, 3, 5, 8, 13, …) × `--retry-initial-delay`, capped at
+  `--retry-max-delay` (default 900s / 15 min), + jitter; on retry exhaustion
+  the page falls back to the PDF's native text layer (with a clearly-marked
+  stub) instead of crashing the run.
 - **Resumable** — per-page outputs and the running summary are cached, so
   re-running only fills in the pages that failed. Per-resource opt-outs
   (`--no-cache-{render,text,resized,extract,format,summary}`) let you
@@ -255,8 +257,11 @@ local paths with HTTP 400, so this patch is mandatory.
 
 ### Retry & fallback
 
-`call_with_retry` wraps each `crew.kickoff()` in bounded exponential
-backoff with jitter. On retry exhaustion (or a `ValidationError` from
+`call_with_retry` wraps each `crew.kickoff()` in Fibonacci-capped backoff
+(1, 1, 2, 3, 5, 8, 13, …) × `--retry-initial-delay`, capped at
+`--retry-max-delay` (default 900s / 15 min), with jitter. By default
+`--max-retries 0` means unlimited transient retries; pass a positive
+integer to bound the budget. On retry exhaustion (or a `ValidationError` from
 malformed model output), the runner can emit a fenced text-layer stub
 so the rest of the run keeps moving:
 
