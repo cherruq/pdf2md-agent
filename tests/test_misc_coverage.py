@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import pymupdf
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -319,3 +320,54 @@ def test_safe_cache_stem_no_suffix_off_windows() -> None:
     if __import__("sys").platform == "win32":
         pytest.skip("non-windows variant")
     assert _safe_cache_stem("CON") == "CON"
+
+
+# --- meta fingerprint drift (BLOCKER 3/3 of PR #8) -----------------------
+
+
+def test_meta_fingerprint_drift_refuses_run(tmp_path: Path, caplog, monkeypatch) -> None:
+    """A second run whose ``--dpi`` differs from the cached meta must be
+    refused with a non-zero exit and a clear stderr message. Regression:
+    PR #8 introduced ``read_meta`` / ``check_meta_matches`` but never
+    wired them into the CLI, so a DPI (or model / persona) drift would
+    happily re-use the stale cached outputs.
+    """
+    from pdf2md_agent.cache import write_meta
+
+    cache_root = tmp_path / "cache"
+    layout = CacheLayout.for_pdf(cache_root, tmp_path / "input.pdf")
+    write_meta(
+        layout.meta_path,
+        pdf=tmp_path / "input.pdf",
+        dpi=144,
+        with_summary=True,
+        model="MiniMax-M3",
+        persona_version="0123456789abcdef",
+    )
+
+    pdf_path = tmp_path / "input.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    captured: dict[str, str] = {"stdout": "", "stderr": ""}
+
+    def _capture_print(msg: str, *args, **kwargs) -> None:
+        stream = kwargs.get("file", None)
+        if stream is None or stream is sys.stdout:
+            captured["stdout"] += msg + "\n"
+        else:
+            captured["stderr"] += msg + "\n"
+
+    with patch.object(cli, "_render_pages", return_value=[]), \
+         patch.object(cli, "make_vision_llm", return_value=object()), \
+         patch.object(cli, "run_pipeline", return_value=[]), \
+         patch.object(cli, "stitch_pages", return_value=""), \
+         patch("builtins.print", side_effect=_capture_print):
+        rc = cli.main([
+            str(pdf_path),
+            "-o", str(tmp_path / "out.md"),
+            "--dpi", "200",
+            "--intermediates-dir", str(cache_root),
+        ])
+    assert rc == 1, "drift must refuse the run with exit code 1"
+    assert "dpi changed" in captured["stderr"]
+    assert "--no-cache-all" in captured["stderr"]

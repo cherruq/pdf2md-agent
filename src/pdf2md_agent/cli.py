@@ -15,6 +15,8 @@ from pdf2md_agent.cache import (
     CacheLayout,
     CacheNoCacheFlags,
     atomic_write_text,
+    check_meta_matches,
+    read_meta,
     write_meta,
 )
 from pdf2md_agent.config import (
@@ -709,6 +711,27 @@ def _run_pipeline(
     log.info("  text-hint:       %s", "on" if not args.no_text_hint else "off")
 
     if keep_intermediates:
+        existing_meta = read_meta(layout.meta_path)
+        if existing_meta is not None:
+            reasons = check_meta_matches(
+                existing_meta,
+                pdf=str(args.pdf.resolve()),
+                dpi=args.dpi,
+                with_summary=with_summary,
+                pages=resolved_pages,
+                model=args.model,
+                persona_version=args.persona_version,
+            )
+            if reasons:
+                for r in reasons:
+                    print(f"error: cache invalid: {r}", file=sys.stderr)
+                print(
+                    "error: meta.json fingerprint drift detected. "
+                    "re-run with --no-cache-all or wipe "
+                    f"{layout.root} to rebuild the cache.",
+                    file=sys.stderr,
+                )
+                return 1
         write_meta(
             layout.meta_path,
             pdf=args.pdf,
