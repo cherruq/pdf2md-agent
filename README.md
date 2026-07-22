@@ -287,6 +287,23 @@ separators; otherwise the runner hashes the absolute PDF path into a
 16-character SHA-256 prefix. The key is deterministic — the same
 absolute path always lands in the same cache directory.
 
+### Cache key
+
+The cache directory name is derived from the PDF's absolute path. If the
+stem (filename without extension) is ≤ 60 characters and contains no
+path separators or Windows-reserved characters, it is used as-is;
+otherwise the first 16 characters of `sha256(absolute_path)` are used.
+
+To find the cache directory for a given PDF:
+
+```python
+import hashlib, pathlib
+pdf = pathlib.Path("/path/to/document.pdf").resolve()
+stem = pdf.stem
+key = stem if (len(stem) <= 60 and '/' not in stem) else hashlib.sha256(str(pdf).encode()).hexdigest()[:16]
+cache_dir = f".pdf2md-agent-cache/{key}/"
+```
+
 `meta.json` carries a 6-field fingerprint (`pdf`, `dpi`, `with_summary`,
 `pages`, `model`, `persona_version`). On every page the runner compares
 the on-disk fingerprint with the current run's configuration; a drift
