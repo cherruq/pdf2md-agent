@@ -133,11 +133,30 @@ def _safe_cache_stem(stem: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pdf2md-agent",
-        description="Convert a PDF to markdown via a CrewAI vision pipeline (MiniMax-M3).",
+        description=(
+            "Render every page of a PDF to an image and feed it through a "
+            "CrewAI pipeline (extract → format → summarize) to produce "
+            "language-preserving Markdown.\n\n"
+            "Stages: render → extract → format → summarize → stitch.\n\n"
+            "Cache: per-resource (render/text/resized/extract/format/summary) "
+            "is reused by default and gated by meta.json fingerprint validation "
+            "(pdf_path, dpi, with_summary, pages, model, persona_version). "
+            "Any drift → fail loud.\n\n"
+            "--no-cache-<resource> opts out a specific resource from cache reuse. "
+            "--no-cache-all disables all cache reuse. --no-<feature> disables an "
+            "optional feature.\n\n"
+            "See CONTRIBUTING.md for naming conventions."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("pdf", type=Path, help="Input PDF path.")
-    parser.add_argument("-o", "--output", type=Path, required=True, help="Output markdown path.")
-    parser.add_argument(
+
+    pipeline = parser.add_argument_group(
+        "Pipeline",
+        "Inputs that drive the per-page pipeline.",
+    )
+    pipeline.add_argument("pdf", type=Path, help="Input PDF path.")
+    pipeline.add_argument("-o", "--output", type=Path, required=True, help="Output markdown path.")
+    pipeline.add_argument(
         "--dpi",
         type=int,
         default=144,
@@ -149,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
             "300+ (print, usually overkill for vision models)."
         ),
     )
-    parser.add_argument(
+    pipeline.add_argument(
         "-p", "--pages",
         type=parse_page_spec,
         default=None,
@@ -161,73 +180,59 @@ def build_parser() -> argparse.ArgumentParser:
             "Default: all pages."
         ),
     )
-    parser.add_argument(
+
+    cache = parser.add_argument_group(
+        "Cache control",
+        "Defaults trust cached resources. Each --no-cache-* opts a single "
+        "resource out; --no-cache-all opts every resource out.",
+    )
+    cache.add_argument(
         "--no-intermediates",
         action="store_true",
-        help="Skip writing intermediate cache files.",
+        help="Skip writing intermediate cache files (uses a tempdir).",
     )
-    parser.add_argument(
+    cache.add_argument(
         "--intermediates-dir",
         type=_safe_intermediates_dir,
         default=None,
         help="Override the intermediates cache directory (default: .pdf2md-agent-cache/<pdf_stem>/).",
     )
-    parser.add_argument(
+    for name in _NO_CACHE_FLAG_NAMES:
+        cache.add_argument(
+            f"--no-cache-{name}",
+            action="store_true",
+            default=False,
+            dest=f"no_cache_{name}",
+            help=argparse.SUPPRESS,
+        )
+    cache.add_argument(
+        "--no-cache-all",
+        action=_NoCacheAllAction,
+        nargs=0,
+        default=False,
+        dest="no_cache_all",
+        help=(
+            "Disable every cache reuse (render/text/resized/extract/"
+            "format/summary). Equivalent to passing all six --no-cache-* "
+            "flags."
+        ),
+    )
+
+    features = parser.add_argument_group(
+        "Feature disable",
+        "Optional features; each --no-<feature> opts a single feature out.",
+    )
+    features.add_argument(
         "--no-summary",
         action="store_true",
         help="Disable cross-page running summary (process each page independently).",
     )
-    parser.add_argument(
+    features.add_argument(
         "--no-text-hint",
         action="store_true",
         help="Disable feeding the PDF's native text layer to the extractor.",
     )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=None,
-        help=(
-            "Total LLM call attempts per page (initial + retries). Overrides "
-            "PDF2MD_AGENT_MAX_RETRIES. Default: 4."
-        ),
-    )
-    parser.add_argument(
-        "--retry-initial-delay",
-        type=float,
-        default=None,
-        help=(
-            "Initial retry delay in seconds (exponential backoff). Overrides "
-            "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
-        ),
-    )
-    parser.add_argument(
-        "--retry-backoff",
-        type=float,
-        default=None,
-        help=(
-            "Exponential backoff multiplier between retries. Overrides "
-            "PDF2MD_AGENT_RETRY_BACKOFF. Default: 2.0."
-        ),
-    )
-    parser.add_argument(
-        "--retry-max-delay",
-        type=float,
-        default=None,
-        help=(
-            "Per-attempt retry delay cap in seconds. Overrides "
-            "PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 30.0."
-        ),
-    )
-    parser.add_argument(
-        "--retry-jitter",
-        type=float,
-        default=None,
-        help=(
-            "Jitter ratio in [0.0, 1.0] applied to each retry delay to avoid "
-            "thundering-herd. Overrides PDF2MD_AGENT_RETRY_JITTER. Default: 0.25."
-        ),
-    )
-    parser.add_argument(
+    features.add_argument(
         "--no-fallback-to-text",
         action="store_true",
         default=False,
@@ -237,7 +242,68 @@ def build_parser() -> argparse.ArgumentParser:
             "native text layer. Default: fallback enabled."
         ),
     )
-    parser.add_argument(
+    features.add_argument(
+        "--stitch-mode",
+        choices=[m.value for m in StitchMode],
+        default=StitchMode.HEURISTIC.value,
+        help=(
+            "How to join per-page Markdown into the final document. "
+            "'heuristic' (default) merges paragraphs/list items/table rows "
+            "split across page boundaries and drops the '---' page separator. "
+            "'off' preserves the legacy '\\n\\n---\\n\\n' separator verbatim."
+        ),
+    )
+
+    tuning = parser.add_argument_group(
+        "Retry & tuning",
+        "LLM retry budget, image downscale, and token-budget knobs.",
+    )
+    tuning.add_argument(
+        "--max-retries",
+        type=int,
+        default=None,
+        help=(
+            "Total LLM call attempts per page (initial + retries). Overrides "
+            "PDF2MD_AGENT_MAX_RETRIES. Default: 4."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-initial-delay",
+        type=float,
+        default=None,
+        help=(
+            "Initial retry delay in seconds (exponential backoff). Overrides "
+            "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-backoff",
+        type=float,
+        default=None,
+        help=(
+            "Exponential backoff multiplier between retries. Overrides "
+            "PDF2MD_AGENT_RETRY_BACKOFF. Default: 2.0."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-max-delay",
+        type=float,
+        default=None,
+        help=(
+            "Per-attempt retry delay cap in seconds. Overrides "
+            "PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 30.0."
+        ),
+    )
+    tuning.add_argument(
+        "--retry-jitter",
+        type=float,
+        default=None,
+        help=(
+            "Jitter ratio in [0.0, 1.0] applied to each retry delay to avoid "
+            "thundering-herd. Overrides PDF2MD_AGENT_RETRY_JITTER. Default: 0.25."
+        ),
+    )
+    tuning.add_argument(
         "--image-long-side",
         type=int,
         default=None,
@@ -250,7 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
             "PDF2MD_AGENT_IMAGE_LONG_SIDE. Default: 1536."
         ),
     )
-    parser.add_argument(
+    tuning.add_argument(
         "--image-quality",
         type=int,
         default=None,
@@ -262,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
             "PDF2MD_AGENT_IMAGE_JPEG_QUALITY. Default: 85."
         ),
     )
-    parser.add_argument(
+    tuning.add_argument(
         "--max-summary-chars",
         type=int,
         default=None,
@@ -273,7 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
             "PDF2MD_AGENT_MAX_SUMMARY_CHARS. Default: 800."
         ),
     )
-    parser.add_argument(
+    tuning.add_argument(
         "--ctx-limit",
         type=int,
         default=None,
@@ -283,18 +349,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Used only when PDF2MD_AGENT_CTX_LIMIT is wrong. Default: 2013."
         ),
     )
-    parser.add_argument(
-        "--stitch-mode",
-        choices=[m.value for m in StitchMode],
-        default=StitchMode.HEURISTIC.value,
-        help=(
-            "How to join per-page Markdown into the final document. "
-            "'heuristic' (default) merges paragraphs/list items/table rows "
-            "split across page boundaries and drops the '---' page separator. "
-            "'off' preserves the legacy '\\n\\n---\\n\\n' separator verbatim."
-        ),
+
+    diagnostic = parser.add_argument_group(
+        "Diagnostic",
+        "Inspection flags; rarely needed in normal runs.",
     )
-    parser.add_argument(
+    diagnostic.add_argument(
         "--model",
         default=MODEL_NAME,
         help=(
@@ -302,7 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to PDF2MD_AGENT_MODEL (default: MiniMax-M3)."
         ),
     )
-    parser.add_argument(
+    diagnostic.add_argument(
         "--persona-version",
         default=PERSONA_VERSION,
         help=(
@@ -311,26 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
             "the SHA-256[:16] of the active persona strings."
         ),
     )
-    for name in _NO_CACHE_FLAG_NAMES:
-        parser.add_argument(
-            f"--no-cache-{name}",
-            action="store_true",
-            default=False,
-            dest=f"no_cache_{name}",
-            help=argparse.SUPPRESS,
-        )
-    parser.add_argument(
-        "--no-cache-all",
-        action=_NoCacheAllAction,
-        nargs=0,
-        default=False,
-        dest="no_cache_all",
-        help=(
-            "Disable every cache reuse (render/text/resized/extract/"
-            "format/summary). Equivalent to passing all six --no-cache-* "
-            "flags."
-        ),
-    )
+
     return parser
 
 

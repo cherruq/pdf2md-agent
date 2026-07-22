@@ -159,9 +159,19 @@ def test_cli_parse_known_args() -> None:
     assert args.no_intermediates is False
     assert args.no_summary is False
     assert args.no_text_hint is False
-    assert args.no_fallback_to_text is False  # default — env may still override
+    assert args.no_fallback_to_text is False
     assert args.model == MODEL_NAME
     assert args.persona_version == agents.PERSONA_VERSION
+
+
+def test_help_lists_argument_groups() -> None:
+    """The --help output must surface the four logical groups so users
+    can discover flags without reading the README."""
+    parser = cli.build_parser()
+    help_text = parser.format_help()
+    for group in ("Pipeline", "Cache control", "Feature disable", "Retry & tuning"):
+        assert group in help_text, f"missing help group: {group}"
+    assert "Diagnostic" in help_text
 
 
 def test_persona_version_hashes_active_personas() -> None:
