@@ -155,7 +155,6 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         no_cache_all=False,
         max_retries=None,
         retry_initial_delay=None,
-        retry_backoff=None,
         retry_max_delay=None,
         retry_jitter=None,
         image_long_side=None,
@@ -615,7 +614,7 @@ def test_call_with_retry_treats_timeout_as_transient(caplog) -> None:
         call_with_retry(
             _slow_fn,
             config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             timeout_seconds=0.05,
             sleep=lambda _w: None,
@@ -643,7 +642,7 @@ def test_call_with_retry_timeout_actually_bounds_wall_clock() -> None:
         call_with_retry(
             _hung_fn,
             config=RetryConfig(
-                max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+                max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             timeout_seconds=0.2,
             sleep=lambda _w: None,

@@ -87,7 +87,7 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
                 text_hint=False,
                 llm=object(),  # type: ignore[arg-type]
                 retry_config=RetryConfig(
-                    max_attempts=2, initial_delay=0.0, backoff=2.0, jitter=0.0
+                    max_attempts=2, initial_delay=0.001, jitter=0.0
                 ),
                 fallback_to_text=True,
             )
@@ -128,7 +128,7 @@ def test_run_pipeline_does_not_fall_back_for_permanent_errors(
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
-                        max_attempts=2, initial_delay=0.0, backoff=2.0, jitter=0.0
+                        max_attempts=2, initial_delay=0.001, jitter=0.0
                     ),
                     fallback_to_text=True,
                 )
@@ -160,7 +160,7 @@ def test_run_pipeline_propagates_when_fallback_disabled(
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
-                        max_attempts=2, initial_delay=0.0, backoff=2.0, jitter=0.0
+                        max_attempts=2, initial_delay=0.001, jitter=0.0
                     ),
                     fallback_to_text=False,
                 )
@@ -206,7 +206,7 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
                 text_hint=False,
                 llm=object(),  # type: ignore[arg-type]
                 retry_config=RetryConfig(
-                    max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+                    max_attempts=1, initial_delay=0.001, jitter=0.0
                 ),
                 fallback_to_text=True,
             )
@@ -247,7 +247,7 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
-                        max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+                        max_attempts=1, initial_delay=0.001, jitter=0.0
                     ),
                     fallback_to_text=False,
                 )
@@ -291,7 +291,7 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
                     retry_config=RetryConfig(
-                        max_attempts=1, initial_delay=0.0, backoff=2.0, jitter=0.0
+                        max_attempts=1, initial_delay=0.001, jitter=0.0
                     ),
                     fallback_to_text=True,
                 )

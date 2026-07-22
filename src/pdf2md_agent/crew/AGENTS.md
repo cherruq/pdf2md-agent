@@ -28,7 +28,7 @@ Subpackage containing the agents, task definitions, runner, and a load-bearing m
 
 ## CONVENTIONS (specific to this subpackage)
 
-- **Persona strings are short** (~60 words each) to fit `MiniMax-M3`'s ~2k context window alongside the page image. Length budgeted in `token_budget.py` before pipeline start.
+- **Persona strings are short** (~60 words each) to fit `MiniMax-M3`'s 512K-1M context window alongside the page image. Length budgeted in `token_budget.py` before pipeline start.
 - **Persona shape**: `"<role-text>\n\n<backstory-text>"` — CrewAI's `Agent(backstory=...)` only reads what's after the first `\n\n`. `_persona_backstory()` does the partition.
 - **Re-exports with `noqa: F401`** in `runner.py:46,52` (`render_pdf`, `make_vision_llm` re-exported so tests can patch at `pdf2md_agent.crew.runner.<name>`). Do not remove the re-exports.
 - **`patch_add_image_tool()` is invoked at import time** from `tasks.py:20`. Tests that need different dims can re-call it; module-level `_active_long_side` / `_active_jpeg_quality` are updated in place without reinstalling the patch.

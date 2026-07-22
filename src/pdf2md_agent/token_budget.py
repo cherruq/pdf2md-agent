@@ -22,10 +22,8 @@ from typing import Final, Union
 
 log = logging.getLogger("pdf2md_agent.token_budget")
 
-# Heuristic bytes-per-token ratio used by estimate_image_tokens. The model in
-# use (~2k token context) allocates a fixed budget per image patch, but the
-# exact mapping between base64-encoded image bytes and tokens is opaque. The
-# value 3.5 is empirically a safe upper bound observed in 400-response logs.
+# 3.5 is empirically a safe upper bound observed in 400-response logs;
+# the base64↔token mapping is opaque across providers, so over-estimate.
 _IMAGE_BYTES_PER_TOKEN: Final[float] = 3.5
 
 # Number of CJK / wide characters per token. Mixed CJK + Latin prose averages
@@ -237,7 +235,8 @@ def plan_for_image(
 
     Args:
         ctx_limit: Hard context-window token limit reported by the model
-            (e.g. ``2013``).
+            (see :func:`pdf2md_agent.config.resolve_ctx_limit` for how
+            this is resolved).
         persona_tokens: Estimated tokens for the agent persona + task
             system prompt (already pre-computed by the caller).
         fixed_text_tokens: Estimated tokens for the per-page variables:

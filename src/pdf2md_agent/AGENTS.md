@@ -14,7 +14,7 @@ Single flat package (no sub-packages except `crew/`). Concerns split by file, no
 | `pages.py` | `parse_page_spec` (argparse `type=`) + `resolve_pages` | 1-based `'1-5,8,11-13'` grammar |
 | `pdf_renderer.py` | `render_pdf` → list[`PageImage`] + native text layer | PyMuPDF; emits PNG + `.text.txt` per page |
 | `vision.py` | `make_vision_llm` factory | `provider="openai"` to bypass LiteLLM |
-| `llm_retry.py` | `RetryConfig` + `is_transient` + `call_with_retry` | exp backoff + jitter; non-transient (4xx) propagates |
+| `llm_retry.py` | `RetryConfig` + `is_transient` + `call_with_retry` | Fibonacci backoff (1,1,2,3,5,8,13…) + jitter; non-transient (4xx) propagates |
 | `token_budget.py` | heuristic estimator + `plan_for_image` binary search | NO `tiktoken`; CJK÷3, ASCII÷4, image b64÷3.5 |
 | `post_stream.py` | `StreamingStitcher` cross-page joiner | `StitchMode.{OFF, HEURISTIC}`; HEURISTIC default |
 
