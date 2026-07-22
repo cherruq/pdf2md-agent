@@ -16,7 +16,7 @@ Subpackage containing the agents, task definitions, runner, and a load-bearing m
 
 | Symbol | File:Line | Refs (≈) | Role |
 |---|---|---|---|
-| `run_pipeline` | runner.py:160 | heavy | resume → reformat → full pipeline, per-page crew + retry + fallback |
+| `run_pipeline` | runner.py:160 | heavy | `CacheNoCacheFlags`-driven per-page pipeline (format → extract → full) |
 | `patch_add_image_tool` | multimodal_patch.py:134 | 1 (called from tasks.py import) | idempotent install; safe to re-call to refresh dims |
 | `_encode_local_image` | multimodal_patch.py:48 | 1 | Pillow LANCZOS downscale + JPEG + b64 |
 | `_to_sentinel` | multimodal_patch.py:102 | 1 | builds `VISION_IMAGE:<media-type>:<b64>` string |
