@@ -254,8 +254,8 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
 
 
 def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
-    """The non-reformat path must continue to use the strict, verbatim
-    formatter persona. Strengthened (D8-012): also verifies the formatter's
+    """The default run must continue to use the strict, verbatim formatter
+    persona. Strengthened (D8-012): also verifies the formatter's
     CommonMark-shaped output propagates through to the returned
     ``PageResult.markdown`` and the on-disk ``format.md``.
     """
@@ -296,7 +296,8 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
                     fallback_to_text=True,
                 )
             called_with_kw = any(
-                "reformat" in call.kwargs for call in mk.call_args_list
+                call.kwargs.get("reformat") is True
+                for call in mk.call_args_list
             )
             assert called_with_kw is False, (
                 "Default run_pipeline must not call make_formatter(reformat=True)"

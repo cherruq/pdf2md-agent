@@ -494,8 +494,11 @@ def _run_format_summarize_only(
 ) -> tuple[str, str, bool]:
     """Run formatter + (optional) summarizer without the extractor.
 
-    Used by --reformat. The format task's description inlines the on-disk
-    extract.txt content as a fenced block, matching the text-hint seam.
+    Used by the ``--no-cache-extract`` short-circuit: when the runner
+    trusts the cached ``extract.txt`` but needs a fresh formatter pass
+    (e.g. a resume-after-failure retry). The format task's description
+    inlines the on-disk extract.txt content as a fenced block, matching
+    the text-hint seam.
 
     On retry exhaustion with ``fallback_to_text=True``, the cached
     ``extract.txt`` is written through unchanged as the new ``format.md``
@@ -534,7 +537,7 @@ def _run_format_summarize_only(
         call_with_retry(
             crew.kickoff,
             config=retry_config,
-            label=f"reformat page {page_number}",
+            label=f"no-cache-extract page {page_number}",
             timeout_seconds=request_timeout_seconds,
         )
         format_md = _output(format_t)
@@ -543,7 +546,7 @@ def _run_format_summarize_only(
         if not fallback_to_text:
             raise
         log.warning(
-            "  page %d: reformat produced malformed output; writing extract.txt as-is",
+            "  page %d: no-cache-extract produced malformed output; writing extract.txt as-is",
             page_number,
         )
         format_md = artifacts.extract_text.read_text(encoding="utf-8")
@@ -553,7 +556,7 @@ def _run_format_summarize_only(
         if not fallback_to_text or not is_transient(exc):
             raise
         log.warning(
-            "  page %d: reformat failed after retries (%s); writing extract.txt as-is",
+            "  page %d: no-cache-extract failed after retries (%s); writing extract.txt as-is",
             page_number,
             _safe_exc_summary(exc),
         )
