@@ -711,7 +711,11 @@ def _run_pipeline(
 
     if keep_intermediates:
         existing_meta = read_meta(layout.meta_path)
-        if existing_meta is not None:
+        # ``--no-cache-all`` discards every cached output, so the on-disk
+        # fingerprint (about to be overwritten by ``write_meta`` below) is
+        # no longer load-bearing — refusing on drift would create a circular
+        # error the user can't escape.
+        if existing_meta is not None and not no_cache.all():
             reasons = check_meta_matches(
                 existing_meta,
                 pdf=str(args.pdf.resolve()),

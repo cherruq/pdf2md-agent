@@ -371,3 +371,47 @@ def test_meta_fingerprint_drift_refuses_run(tmp_path: Path, caplog, monkeypatch)
     assert rc == 1, "drift must refuse the run with exit code 1"
     assert "dpi changed" in captured["stderr"]
     assert "--no-cache-all" in captured["stderr"]
+
+
+def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
+    tmp_path: Path,
+) -> None:
+    """Regression: ``--no-cache-all`` opts every cache resource out, so
+    the meta.json fingerprint check must also be bypassed — otherwise
+    the runner hits a circular error the user can't escape.
+    """
+    from pdf2md_agent.cache import read_meta, write_meta
+
+    cache_root = tmp_path / "cache"
+    layout = CacheLayout.for_pdf(cache_root, tmp_path / "input.pdf")
+    # Stale absolute path on disk — simulates the "cache from a prior
+    # cwd" pattern in the user's bug report.
+    write_meta(
+        layout.meta_path,
+        pdf=tmp_path / "different-cwd" / "input.pdf",
+        dpi=144,
+        with_summary=True,
+        model="MiniMax-M3",
+        persona_version="0123456789abcdef",
+    )
+
+    pdf_path = tmp_path / "input.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    with patch.object(cli, "_render_pages", return_value=[]), \
+         patch.object(cli, "make_vision_llm", return_value=object()), \
+         patch.object(cli, "run_pipeline", return_value=[]), \
+         patch.object(cli, "stitch_pages", return_value=""):
+        rc = cli.main([
+            str(pdf_path),
+            "-o", str(tmp_path / "out.md"),
+            "--intermediates-dir", str(cache_root),
+            "--no-cache-all",
+        ])
+
+    assert rc == 0, "drift must NOT refuse the run when --no-cache-all is set"
+    # meta.json must now reflect the *current* pdf field — proves the
+    # fingerprint was actually rewritten for this run, not left stale.
+    post = read_meta(layout.meta_path)
+    assert post is not None
+    assert Path(post.pdf) == pdf_path.resolve()

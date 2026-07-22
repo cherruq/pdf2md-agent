@@ -416,6 +416,16 @@ class CacheNoCacheFlags:
             "summary": self.summary,
         }
 
+    def all(self) -> bool:
+        """True iff every per-resource flag is True (i.e. ``--no-cache-all``).
+
+        ``--no-cache-all`` opts every cache resource out, which means
+        downstream code can also discard stale derived state (such as
+        ``meta.json``'s recorded fingerprint) rather than refusing the
+        run on a drift that's about to be regenerated anyway.
+        """
+        return all(self.as_dict().values())
+
 
 def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
     """True if a cached ``page_NNNN_extract.txt`` exists for this page

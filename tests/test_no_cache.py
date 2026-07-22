@@ -104,6 +104,25 @@ def test_resolve_no_cache_flags_mirrors_args() -> None:
     assert flags == CacheNoCacheFlags(format=True, text=True)
 
 
+@pytest.mark.parametrize(
+    "flags",
+    [
+        CacheNoCacheFlags(),
+        CacheNoCacheFlags(format=True),
+        CacheNoCacheFlags(extract=True, format=True),
+        CacheNoCacheFlags(render=True, text=True, resized=True, extract=True),
+    ],
+)
+def test_cache_no_cache_flags_all_false_for_partial(flags: CacheNoCacheFlags) -> None:
+    assert flags.all() is False
+
+
+def test_cache_no_cache_flags_all_true_only_when_every_flag_set() -> None:
+    assert CacheNoCacheFlags(
+        render=True, text=True, resized=True, extract=True, format=True, summary=True
+    ).all() is True
+
+
 # --- H1 sentinel: has_cached_extract rejects empty extract.txt -------------
 
 
