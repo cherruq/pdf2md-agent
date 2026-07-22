@@ -419,16 +419,24 @@ class CacheNoCacheFlags:
 
 def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
     """True if a cached ``page_NNNN_extract.txt`` exists for this page
-    AND its content is non-empty.
+    AND its content is a real extractor payload (not a fallback sentinel).
 
-    A zero-byte extract file is the sentinel for "this page attempted but
-    the vision model failed and we fell back to the text layer" — trusting
-    it would propagate an empty markdown into the formatter. The non-empty
-    gate makes the fallback path observable to users and keeps the
-    no-cache re-extract logic safe.
+    Two sentinel shapes must be rejected:
+    * Zero-byte file — legacy H1 sentinel: vision model failed and the
+      runner wrote an empty placeholder. Trusting it would propagate
+      empty markdown into the formatter.
+    * Non-empty fallback marker — the runner writes
+      ``_FALLBACK_SENTINEL = "(vision model unavailable for page N; ...)"``
+      on text-layer fallback; trusting that as a real extract would feed
+      the sentinel text into ``--no-cache-extract``'s formatter pass.
     """
     path = layout.page_extract_path(page_number)
-    return path.is_file() and path.stat().st_size > 0
+    if not (path.is_file() and path.stat().st_size > 0):
+        return False
+    head = path.read_text(encoding="utf-8", errors="replace")[:128]
+    if head.lstrip().startswith("(vision model unavailable for page"):
+        return False
+    return True
 
 
 __all__ = [

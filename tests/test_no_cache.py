@@ -119,6 +119,24 @@ def test_has_cached_extract_true_when_extract_nonempty(tmp_path: Path) -> None:
     assert has_cached_extract(layout, 1) is True
 
 
+def test_has_cached_extract_false_when_extract_is_fallback_sentinel(
+    tmp_path: Path,
+) -> None:
+    """Regression: the runner's text-layer fallback writes a NON-EMPTY
+    sentinel line into ``extract.txt`` so the file isn't silently trusted
+    as a real extractor payload. ``has_cached_extract`` must parse the
+    prefix and reject the sentinel; otherwise ``--no-cache-extract``
+    would feed the marker text into the formatter.
+    """
+    from pdf2md_agent.crew.runner import _FALLBACK_SENTINEL
+
+    layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "fake.pdf")
+    layout.page_extract_path(1).write_text(
+        _FALLBACK_SENTINEL.format(page=1), encoding="utf-8"
+    )
+    assert has_cached_extract(layout, 1) is False
+
+
 # --- per-page priority matrix ----------------------------------------------
 
 
