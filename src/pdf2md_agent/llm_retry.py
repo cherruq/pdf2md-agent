@@ -18,10 +18,13 @@ markdown from the PDF's native text layer (no vision model required).
 from __future__ import annotations
 
 import logging
-import random
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Callable, TypeVar
+
+# secrets.SystemRandom (vs random) so retry backoffs cannot sync across clients.
+_RNG = secrets.SystemRandom()
 
 from openai import (
     APIConnectionError,
@@ -142,7 +145,7 @@ def call_with_retry(
                     _safe_exc_summary(exc),
                 )
                 raise
-            jittered = delay * (1.0 + random.uniform(-config.jitter, config.jitter))
+            jittered = delay * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
             wait = max(0.0, min(jittered, config.max_delay))
             log.info(
                 "%s: retrying after transient %s on attempt %d/%d (%s); "
@@ -156,8 +159,10 @@ def call_with_retry(
             )
             sleep(wait)
             delay = min(delay * config.backoff, config.max_delay)
-    # Unreachable: the loop always returns or raises.
-    assert last_exc is not None  # pragma: no cover
+    # Unreachable: the loop always returns or raises. Explicit guard for
+    # type-checkers and for `python -O` (asserts are stripped under -O).
+    if last_exc is None:
+        raise RuntimeError("unreachable: retry loop must set last_exc")
     raise last_exc  # pragma: no cover
 
 
