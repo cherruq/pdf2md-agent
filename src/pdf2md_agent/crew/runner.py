@@ -1,21 +1,31 @@
-"""Per-page CrewAI runner: maintains running summary state, writes cache.
+"""Per-page pipeline runner: explicit data flow, no hidden state.
+
+Each page goes through three independent LLM calls — extractor, formatter,
+summarizer — each wrapped in its own ``call_with_retry`` so transient
+failures on one call do not poison the next. Call arguments are the entire
+visible state: what the planner budgets is exactly what goes over the wire.
+
+Why explicit calls instead of a CrewAI ``Crew.kickoff``? CrewAI's
+``_invoke_loop_native_tools`` is a think→action→observe→answer loop; the
+``AddImageTool`` result (base64 JPEG) is re-inlined into every subsequent
+turn, which made the planner's token estimate diverge from the actual
+sent payload. Going direct via :mod:`pdf2md_agent.raw_pipeline` keeps each
+call to exactly one HTTP request with exactly one image inline (or zero,
+for text-only calls).
 
 Budgets every extract call against :func:`plan_for_image`: when a raw page
-PNG would blow the model context window (e.g. a 184 KB 144 DPI PNG
-encoding to ~71 k base64 tokens), the page is downscaled to a JPEG copy
-under ``layout.pages_dir`` before the agent ever sees it.
+PNG would blow the model context window (e.g. a 184 KB 144 DPI PNG encoding
+to ~71 k base64 tokens), the page is downscaled to a JPEG copy under
+``layout.pages_dir`` before the extractor sees it.
 """
 from __future__ import annotations
 
 import logging
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from crewai import Crew, LLM, Process
-from pydantic import ValidationError
-
+from pdf2md_agent import raw_pipeline
 from pdf2md_agent.cache import (
     CacheLayout,
     CacheNoCacheFlags,
@@ -34,56 +44,40 @@ from pdf2md_agent.config import (
     resolve_ctx_limit,
     TOKEN_BUDGET_SAFETY,
 )
-from pdf2md_agent.crew.agents import (
-    EXTRACTOR_BACKSTORY,
+from pdf2md_agent.llm_retry import (
+    RetryConfig,
+    _safe_exc_summary,
+    call_with_retry,
+    is_transient,
+)
+from pdf2md_agent.pdf_renderer import (  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.render_pdf` without `create=True`
+    PageImage,
+    render_pdf,
+)
+from pdf2md_agent.raw_pipeline import (
     PERSONA_VERSION,
-    make_extractor,
-    make_formatter,
-    make_summarizer,
+    call_extractor,
+    call_formatter,
+    call_summarizer,
 )
-from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
-from pdf2md_agent.crew.tasks import (
-    _truncate_summary,
-    build_extract_description,
-    make_extract_task,
-    make_format_task,
-    make_format_task_from_extract_file,
-    make_summarize_task,
-)
-from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient, _safe_exc_summary
-from pdf2md_agent.pdf_renderer import PageImage, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.render_pdf` without `create=True`
 from pdf2md_agent.token_budget import (
     estimate_image_tokens,
     estimate_text_tokens,
     plan_for_image,
 )
-from pdf2md_agent.vision import make_vision_llm  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.make_vision_llm` without `create=True`
 
 log = logging.getLogger("pdf2md_agent.runner")
 
-_THINK_OPEN = chr(60) + "think" + chr(62)
-_THINK_CLOSE = chr(60) + "/think" + chr(62)
-_THINK_BLOCK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
+
+# Re-export the client factory so tests can patch
+# ``pdf2md_agent.crew.runner._make_client`` without ``create=True``.
+_make_client = raw_pipeline._make_client  # noqa: F401
 
 
-def _strip_think(text: str) -> str:
-    """Remove inline model reasoning blocks from output.
-
-    Some models wrap their scratchpad in reasoning tags; the configured
-    MiniMax-M3 endpoint sometimes leaves them in the response. Strip them
-    defensively before downstream consumers see them.
-    """
-    return _THINK_BLOCK_RE.sub("", text).strip()
-
-
-def _output(output_text: object) -> str:
-    """Extract clean text from a CrewAI task's output."""
-    out = getattr(output_text, "output", None)
-    if out is None:
-        return ""
-    raw = getattr(out, "raw", None)
-    text = raw if isinstance(raw, str) else str(out)
-    return _strip_think(text)
+_FALLBACK_SENTINEL: str = (
+    "(vision model unavailable for page {page}; text-layer fallback emitted; "
+    "treat as sentinel — no extractor payload available)\n"
+)
 
 
 def _text_layer_fallback(artifacts: PageArtifacts) -> str:
@@ -112,9 +106,9 @@ def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_qualit
     """Render ``src`` to ``dst`` as a downscaled JPEG.
 
     Uses the same LANCZOS resampler as
-    :func:`pdf2md_agent.crew.multimodal_patch._encode_local_image` so the
-    pre-resized cache file looks identical to what the in-memory patch
-    would produce inline.
+    :func:`pdf2md_agent.raw_pipeline._encode_local_image` so the
+    pre-resized cache file is byte-identical to what the inline call would
+    produce at extract time.
     """
     from PIL import Image
 
@@ -159,12 +153,6 @@ def _record_text_layer_fallback(
     return PageResult(page_number, format_md, summary)
 
 
-_FALLBACK_SENTINEL: str = (
-    "(vision model unavailable for page {page}; text-layer fallback emitted; "
-    "treat as sentinel — no extractor payload available)\n"
-)
-
-
 @dataclass(frozen=True, slots=True)
 class PageResult:
     """One page's final markdown + the running summary after this page."""
@@ -181,7 +169,6 @@ def run_pipeline(
     with_summary: bool,
     no_cache: CacheNoCacheFlags,
     text_hint: bool,
-    llm: LLM,
     retry_config: RetryConfig | None = None,
     fallback_to_text: bool = True,
     ctx_limit: int = 0,
@@ -193,15 +180,16 @@ def run_pipeline(
     dpi: int = 144,
     request_timeout_seconds: float | None = None,
 ) -> list[PageResult]:
-    """Run the per-page CrewAI pipeline across ``pages`` and return page results.
+    """Run the per-page pipeline across ``pages`` and return page results.
 
     ``text_hint`` controls whether the native PDF text layer is fed to the
-    extractor agent as a per-page hint. Disabled → pass empty string.
+    extractor call as a per-page hint. Disabled → pass empty string.
 
-    ``retry_config`` controls transient-error retry around each page's
-    ``crew.kickoff()`` call. On exhaustion, if ``fallback_to_text`` is True,
-    the page is rendered as a fenced text-layer markdown stub so the rest of
-    the pipeline keeps moving; otherwise the exception propagates.
+    ``retry_config`` controls transient-error retry around each individual
+    LLM call (extract / format / summarize). On exhaustion, if
+    ``fallback_to_text`` is True, the page is rendered as a fenced text-layer
+    markdown stub so the rest of the pipeline keeps moving; otherwise the
+    exception propagates.
 
     ``no_cache`` is the per-resource opt-out switch (see
     :class:`pdf2md_agent.cache.CacheNoCacheFlags`). Every flag defaults to
@@ -220,16 +208,8 @@ def run_pipeline(
     """
     if ctx_limit <= 0:
         ctx_limit = resolve_ctx_limit()
-    extractor: Agent | None = None
-    formatter = make_formatter(llm)
-    summarizer: Agent | None = None
-    if with_summary:
-        summarizer = make_summarizer(llm)
-
-    patch_add_image_tool(
-        target_long_side=image_long_side,
-        jpeg_quality=image_jpeg_quality,
-    )
+    retry_config = retry_config or RetryConfig()
+    client = _make_client()
 
     summary = ""
     if not no_cache.summary:
@@ -251,8 +231,6 @@ def run_pipeline(
     phases = "extract + format + summarize" if with_summary else "extract + format"
     pages_dir = layout.pages_dir
     summary_path = layout.summary_path
-
-    extractor_persona_text = EXTRACTOR_BACKSTORY
 
     for idx, page in enumerate(pages, start=1):
         artifacts = layout.artifacts_for(page)
@@ -276,15 +254,16 @@ def run_pipeline(
                 page.page_number,
             )
             fmt_out, summary, did_fallback = _run_format_summarize_only(
+                client=client,
                 page_number=page.page_number,
                 artifacts=artifacts,
                 summary_in=summary,
                 summary_path=summary_path,
                 with_summary=with_summary,
-                llm=llm,
                 retry_config=retry_config,
                 fallback_to_text=fallback_to_text,
                 max_summary_chars=max_summary_chars,
+                request_timeout_seconds=request_timeout_seconds,
             )
             elapsed = time.monotonic() - page_started
             log.info(
@@ -307,23 +286,17 @@ def run_pipeline(
                 page.page_number,
             )
 
-        if extractor is None:
-            extractor = make_extractor(llm)
-        if formatter is None:
-            formatter = make_formatter(llm)
-        if summarizer is None and with_summary:
-            summarizer = make_summarizer(llm)
-
         text_hint_str = (
             artifacts.page_text.read_text(encoding="utf-8") if text_hint else ""
         )
 
-        persona_tokens = estimate_text_tokens(extractor_persona_text)
-        description_for_budget = build_extract_description(
-            page.image_path, text_hint_str, summary,
+        persona_tokens = estimate_text_tokens(raw_pipeline.EXTRACTOR_PERSONA)
+        user_text_for_budget = raw_pipeline.build_extractor_user_text(
+            text_hint=text_hint_str,
+            previous_summary=summary,
             max_summary_chars=max_summary_chars,
         )
-        fixed_text_tokens = estimate_text_tokens(description_for_budget)
+        fixed_text_tokens = estimate_text_tokens(user_text_for_budget)
         decision = plan_for_image(
             ctx_limit=ctx_limit,
             persona_tokens=persona_tokens,
@@ -368,61 +341,22 @@ def run_pipeline(
         log.info("  [%d/%d] page %d: %s starting", idx, total, page.page_number, phases)
         page_started = time.monotonic()
 
-        extract_t = make_extract_task(
-            extractor,
-            attach_image_path,
-            text_hint=text_hint_str,
-            previous_summary=summary,
-            max_summary_chars=max_summary_chars,
-        )
-        format_t = make_format_task(formatter, extract_t)
-        tasks = [extract_t, format_t]
-        agents_list = [extractor, formatter]
-        if summarizer is not None:
-            summarize_t = make_summarize_task(
-                summarizer, format_t, summary, max_chars=max_summary_chars
-            )
-            tasks.append(summarize_t)
-            agents_list.append(summarizer)
-        else:
-            summarize_t = None
-
-        crew = Crew(
-            agents=agents_list,
-            tasks=tasks,
-            process=Process.sequential,
-            verbose=False,
-        )
         try:
-            call_with_retry(
-                crew.kickoff,
-                config=retry_config or RetryConfig(),
-                label=f"page {page.page_number}",
+            extract_text = call_with_retry(
+                lambda: _do_extract(
+                    client=client,
+                    image_path=attach_image_path,
+                    text_hint=text_hint_str,
+                    previous_summary=summary,
+                    max_summary_chars=max_summary_chars,
+                    target_long_side=decision.needed_long_side,
+                    jpeg_quality=image_jpeg_quality,
+                    timeout=request_timeout_seconds,
+                ),
+                config=retry_config,
+                label=f"page {page.page_number} extract",
                 timeout_seconds=request_timeout_seconds,
             )
-        except ValidationError as exc:
-            if not fallback_to_text:
-                raise
-            log.warning(
-                "  [%d/%d] page %d: model returned malformed response "
-                "(%s, %d validation error(s)); falling back to text layer",
-                idx,
-                total,
-                page.page_number,
-                type(exc).__name__,
-                len(exc.errors()),
-            )
-            results.append(_record_text_layer_fallback(
-                idx=idx,
-                total=total,
-                page_number=page.page_number,
-                page_started=page_started,
-                artifacts=artifacts,
-                summary=summary,
-                completion_label="validation-fallback",
-            ))
-            fallback_pages.append(page.page_number)
-            continue
         except BaseException as exc:
             if not fallback_to_text or not is_transient(exc):
                 raise
@@ -446,16 +380,76 @@ def run_pipeline(
             fallback_pages.append(page.page_number)
             continue
 
-        extract_text = _output(extract_t)
-        format_md = _output(format_t)
+        try:
+            format_md = call_with_retry(
+                lambda: call_formatter(
+                    client,
+                    extract_text=extract_text,
+                    timeout=request_timeout_seconds,
+                ),
+                config=retry_config,
+                label=f"page {page.page_number} format",
+                timeout_seconds=request_timeout_seconds,
+            )
+        except BaseException as exc:
+            if not fallback_to_text or not is_transient(exc):
+                raise
+            log.warning(
+                "  [%d/%d] page %d: formatter failed after retries (%s); "
+                "falling back to text layer",
+                idx,
+                total,
+                page.page_number,
+                _safe_exc_summary(exc),
+            )
+            results.append(_record_text_layer_fallback(
+                idx=idx,
+                total=total,
+                page_number=page.page_number,
+                page_started=page_started,
+                artifacts=artifacts,
+                summary=summary,
+                completion_label="fallback",
+            ))
+            fallback_pages.append(page.page_number)
+            continue
+
         artifacts.extract_text.write_text(extract_text, encoding="utf-8")
         artifacts.format_markdown.write_text(format_md, encoding="utf-8")
 
-        if summarize_t is not None and not no_cache.summary and with_summary:
-            summary = _output(summarize_t)
-            if len(summary) > max_summary_chars:
-                summary = _truncate_summary(summary, max_summary_chars)
-            write_summary(summary_path, summary)
+        if with_summary and not no_cache.summary:
+            try:
+                summary = call_with_retry(
+                    lambda: call_summarizer(
+                        client,
+                        format_text=format_md,
+                        previous_summary=summary,
+                        max_chars=max_summary_chars,
+                        timeout=request_timeout_seconds,
+                    ),
+                    config=retry_config,
+                    label=f"page {page.page_number} summarize",
+                    timeout_seconds=request_timeout_seconds,
+                )
+            except BaseException as exc:
+                if not fallback_to_text or not is_transient(exc):
+                    raise
+                log.warning(
+                    "  [%d/%d] page %d: summarizer failed after retries (%s); "
+                    "keeping previous summary",
+                    idx,
+                    total,
+                    page.page_number,
+                    _safe_exc_summary(exc),
+                )
+                # Fallback for summarizer: keep the prior summary. Format
+                # + extract are already on disk; only the running summary
+                # is left untouched.
+                fallback_pages.append(page.page_number)
+            else:
+                if len(summary) > max_summary_chars:
+                    summary = raw_pipeline._truncate_summary(summary, max_summary_chars)
+                write_summary(summary_path, summary)
 
         elapsed = time.monotonic() - page_started
         log.info(
@@ -485,14 +479,39 @@ def run_pipeline(
     return results
 
 
+def _do_extract(
+    *,
+    client: object,
+    image_path: Path,
+    text_hint: str,
+    previous_summary: str,
+    max_summary_chars: int,
+    target_long_side: int,
+    jpeg_quality: int,
+    timeout: float | None,
+) -> str:
+    """Adapter so :func:`call_extractor`'s positional ``client`` arg works
+    with :func:`call_with_retry`'s kwargs-based invocation."""
+    return call_extractor(
+        client,  # type: ignore[arg-type]
+        image_path=image_path,
+        text_hint=text_hint,
+        previous_summary=previous_summary,
+        max_summary_chars=max_summary_chars,
+        target_long_side=target_long_side,
+        jpeg_quality=jpeg_quality,
+        timeout=timeout,
+    )
+
+
 def _run_format_summarize_only(
     *,
+    client: object,
     page_number: int,
     artifacts: PageArtifacts,
     summary_in: str,
     summary_path: Path,
     with_summary: bool,
-    llm: LLM,
     retry_config: RetryConfig,
     fallback_to_text: bool,
     max_summary_chars: int,
@@ -502,9 +521,9 @@ def _run_format_summarize_only(
 
     Used by the ``--no-cache-extract`` short-circuit: when the runner
     trusts the cached ``extract.txt`` but needs a fresh formatter pass
-    (e.g. a resume-after-failure retry). The format task's description
-    inlines the on-disk extract.txt content as a fenced block, matching
-    the text-hint seam.
+    (e.g. a resume-after-failure retry). The formatter's user message
+    inlines the on-disk ``extract.txt`` content as a fenced block,
+    matching the text-hint seam.
 
     On retry exhaustion with ``fallback_to_text=True``, the cached
     ``extract.txt`` is written through unchanged as the new ``format.md``
@@ -514,76 +533,76 @@ def _run_format_summarize_only(
 
     Returns ``(format_md, summary_out, did_fallback)``.
     """
-    formatter = make_formatter(llm)
-    format_t = make_format_task_from_extract_file(formatter, artifacts.extract_text)
-
-    if not with_summary:
-        tasks = [format_t]
-        agents_list = [formatter]
-        summarize_t = None
-    else:
-        summarizer = make_summarizer(llm)
-        summarize_t = make_summarize_task(
-            summarizer, format_t, summary_in, max_chars=max_summary_chars
-        )
-        tasks = [format_t, summarize_t]
-        agents_list = [formatter, summarizer]
-
-    crew = Crew(
-        agents=agents_list,
-        tasks=tasks,
-        process=Process.sequential,
-        verbose=False,
-    )
-
+    extract_text = artifacts.extract_text.read_text(encoding="utf-8")
+    did_fallback = False
     format_md: str
     summary_out: str
-    did_fallback = False
     try:
-        call_with_retry(
-            crew.kickoff,
+        format_md = call_with_retry(
+            lambda: call_formatter(
+                client,
+                extract_text=extract_text,
+                timeout=request_timeout_seconds,
+            ),
             config=retry_config,
-            label=f"no-cache-extract page {page_number}",
+            label=f"no-cache-extract page {page_number} format",
             timeout_seconds=request_timeout_seconds,
         )
-        format_md = _output(format_t)
-        summary_out = _output(summarize_t) if summarize_t is not None else summary_in
-    except ValidationError:
-        if not fallback_to_text:
-            raise
-        log.warning(
-            "  page %d: no-cache-extract produced malformed output; writing extract.txt as-is",
-            page_number,
-        )
-        format_md = artifacts.extract_text.read_text(encoding="utf-8")
-        summary_out = summary_in
-        did_fallback = True
     except BaseException as exc:
         if not fallback_to_text or not is_transient(exc):
             raise
         log.warning(
-            "  page %d: no-cache-extract failed after retries (%s); writing extract.txt as-is",
+            "  page %d: no-cache-extract format failed after retries (%s); "
+            "writing extract.txt as-is",
             page_number,
             _safe_exc_summary(exc),
         )
-        format_md = artifacts.extract_text.read_text(encoding="utf-8")
+        format_md = extract_text
         summary_out = summary_in
         did_fallback = True
+    else:
+        if with_summary:
+            try:
+                summary_out = call_with_retry(
+                    lambda: call_summarizer(
+                        client,
+                        format_text=format_md,
+                        previous_summary=summary_in,
+                        max_chars=max_summary_chars,
+                        timeout=request_timeout_seconds,
+                    ),
+                    config=retry_config,
+                    label=f"no-cache-extract page {page_number} summarize",
+                    timeout_seconds=request_timeout_seconds,
+                )
+            except BaseException as exc:
+                if not fallback_to_text or not is_transient(exc):
+                    raise
+                log.warning(
+                    "  page %d: no-cache-extract summarize failed after retries (%s); "
+                    "keeping prior summary",
+                    page_number,
+                    _safe_exc_summary(exc),
+                )
+                summary_out = summary_in
+                did_fallback = True
+        else:
+            summary_out = summary_in
 
     artifacts.format_markdown.write_text(format_md, encoding="utf-8")
 
-    if summarize_t is not None and not did_fallback:
+    if with_summary and not did_fallback:
         if len(summary_out) > max_summary_chars:
-            summary_out = _truncate_summary(summary_out, max_summary_chars)
+            summary_out = raw_pipeline._truncate_summary(summary_out, max_summary_chars)
         write_summary(summary_path, summary_out)
 
     return format_md, summary_out, did_fallback
 
 
 __all__ = [
-    "PageImage",  # re-exported from pdf2md_agent.pdf_renderer
+    "PageImage",  # re-exported from pdf_renderer
     "PageResult",
-    "make_vision_llm",  # re-exported from pdf2md_agent.vision
-    "render_pdf",  # re-exported from pdf2md_agent.pdf_renderer
+    "_make_client",  # re-exported from raw_pipeline (tests patch here)
+    "render_pdf",  # re-exported from pdf_renderer
     "run_pipeline",
 ]

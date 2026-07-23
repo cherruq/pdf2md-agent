@@ -34,18 +34,16 @@ from pdf2md_agent.config import (
     TOKEN_BUDGET_SAFETY,
     resolve_ctx_limit,
 )
-from pdf2md_agent.crew.agents import PERSONA_VERSION
 from pdf2md_agent.crew.runner import run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec, resolve_pages
-from PIL import Image
-
 from pdf2md_agent.pdf_renderer import PageImage, render_pdf
 from pdf2md_agent.post_stream import StitchMode, stitch_pages
+from pdf2md_agent.raw_pipeline import PERSONA_VERSION
 from pdf2md_agent.render_skip import (
     maybe_skip_render as _maybe_skip_render,
 )
-from pdf2md_agent.vision import make_vision_llm
+from PIL import Image
 
 log = logging.getLogger("pdf2md-agent")
 
@@ -757,7 +755,6 @@ def _run_pipeline(
     log.info("rendered %d page(s) to %s", len(pages), render_target)
 
     log.info("running pipeline: extract + format%s", " + summarize" if with_summary else "")
-    llm = make_vision_llm()
     log.info(
         "  retry:           max_attempts=%s, initial_delay=%.1fs, fibonacci, max_delay=%.1fs, jitter=±%.0f%%",
         retry_config.max_attempts if retry_config.max_attempts is not None else "\u221e",
@@ -785,7 +782,6 @@ def _run_pipeline(
         with_summary=with_summary,
         no_cache=no_cache,
         text_hint=not args.no_text_hint,
-        llm=llm,
         retry_config=retry_config,
         fallback_to_text=fallback_to_text,
         ctx_limit=ctx_limit,

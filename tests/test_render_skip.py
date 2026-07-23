@@ -164,7 +164,6 @@ def test_render_skip_honours_no_cache_render_flag(
     monkeypatch.setattr(
         "pdf2md_agent.cli.stitch_pages", lambda *_a, **_k: "hello"
     )
-    monkeypatch.setattr("pdf2md_agent.cli.make_vision_llm", lambda: object())
     monkeypatch.setattr(
         "pdf2md_agent.cli.write_meta", lambda *_a, **_k: None
     )

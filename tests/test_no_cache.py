@@ -11,6 +11,7 @@ Maps the path-B contract:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -22,22 +23,58 @@ from pdf2md_agent.crew.runner import PageImage, run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
 
 
-class _FakeOutput:
-    def __init__(self, raw: str) -> None:
-        self.raw = raw
+# --- OpenAI fake client (same shape as tests/test_runner.py) -----------
 
 
-class _FakeTask:
-    def __init__(self, raw: str = "") -> None:
-        self.output = _FakeOutput(raw)
+class _FakeMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
 
 
-def _page(page_number: int) -> PageImage:
+class _FakeChoice:
+    def __init__(self, content: str) -> None:
+        self.message = _FakeMessage(content)
+
+
+class _FakeResponse:
+    def __init__(self, content: str) -> None:
+        self.choices = [_FakeChoice(content)]
+
+
+class _FakeCompletions:
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> _FakeResponse:
+        self.calls.append(kwargs)
+        content = self._responses.pop(0) if self._responses else ""
+        return _FakeResponse(content)
+
+
+class _FakeChat:
+    def __init__(self, completions: _FakeCompletions) -> None:
+        self.completions = completions
+
+
+class _FakeClient:
+    def __init__(self, completions: _FakeCompletions) -> None:
+        self.chat = _FakeChat(completions)
+
+
+def _page(page_number: int, tmp_path: Path | None = None) -> PageImage:
+    """Build a PageImage whose path points to a real PNG so _encode_local_image succeeds."""
+    base = tmp_path or Path("/tmp")
+    png_path = base / f"page_{page_number:04d}.png"
+    if not png_path.exists():
+        from PIL import Image
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (40, 40), "white").save(png_path, "PNG")
     return PageImage(
         page_number=page_number,
         width=100,
         height=100,
-        image_path=Path(f"page_{page_number:04d}.png"),
+        image_path=png_path,
     )
 
 
@@ -171,42 +208,34 @@ def _seed_complete_page(layout: CacheLayout, page_number: int) -> None:
     )
 
 
-def test_no_cache_format_reruns_full_pipeline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    page = _page(1)
+def test_no_cache_format_reruns_full_pipeline(tmp_path: Path) -> None:
+    """``--no-cache-format`` forces a full extract → format cycle (no summary here)."""
+    page = _page(1, tmp_path)
     layout = _layout(tmp_path, 1)
     _seed_complete_page(layout, 1)
 
-    extract_t = _FakeTask(raw="fresh extract")
-    format_t = _FakeTask(raw="fresh md")
+    completions = _FakeCompletions(
+        responses=["fresh extract", "fresh md"]
+    )
+    fake = _FakeClient(completions)
 
-    calls: list[str] = []
-
-    def _track(*_args: object, **_kwargs: object) -> None:
-        calls.append("kickoff")
-
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task"), \
-         patch.object(runner, "Crew") as crew_cls:
-        crew_cls.return_value.kickoff = _track
+    with patch.object(runner, "_make_client", return_value=fake):
         results = run_pipeline(
             pages=[page],
             layout=layout,
             with_summary=False,
             no_cache=CacheNoCacheFlags(format=True),
             text_hint=False,
-            llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
                 max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
+            image_long_side=40,
+            image_min_long_side=40,
+            image_jpeg_quality=70,
         )
 
-    assert calls, "full pipeline must run when --no-cache-format is set"
+    assert len(completions.calls) == 2, "extract + format calls expected"
     assert results[0].markdown == "fresh md"
     assert layout.page_format_path(1).read_text(encoding="utf-8") == "fresh md"
 
@@ -220,48 +249,36 @@ def _seed_extract_only(layout: CacheLayout, page_number: int) -> None:
     )
 
 
-def test_no_cache_extract_runs_formatter_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    page = _page(1)
+def test_no_cache_extract_runs_formatter_only(tmp_path: Path) -> None:
+    """``--no-cache-extract`` skips the vision extractor and only re-runs
+    the formatter (plus optional summarizer) from cached extract.txt."""
+    page = _page(1, tmp_path)
     layout = _layout(tmp_path, 1)
     _seed_extract_only(layout, 1)
 
-    extract_t = _FakeTask(raw="unused")
-    format_t = _FakeTask(raw="re-formatted md")
-    summarize_t = _FakeTask(raw="new summary")
+    completions = _FakeCompletions(
+        responses=["re-formatted md", "new summary"]
+    )
+    fake = _FakeClient(completions)
 
-    extractor_calls: list[object] = []
-
-    def _track_extractor(*_args: object, **_kwargs: object) -> object:
-        extractor_calls.append(object())
-        class _E: ...
-        return _E()
-
-    crew_obj = type("C", (), {})()
-    crew_obj.kickoff = lambda: None
-
-    with patch.object(runner, "make_extractor", side_effect=_track_extractor), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_summarizer"), \
-         patch.object(runner, "make_format_task_from_extract_file", return_value=format_t), \
-         patch.object(runner, "make_summarize_task", return_value=summarize_t), \
-         patch.object(runner, "_output", side_effect=lambda t: getattr(t.output, "raw", "")), \
-         patch.object(runner, "Crew", return_value=crew_obj):
+    with patch.object(runner, "_make_client", return_value=fake):
         results = run_pipeline(
             pages=[page],
             layout=layout,
             with_summary=True,
             no_cache=CacheNoCacheFlags(extract=True),
             text_hint=False,
-            llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
                 max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
+            image_long_side=40,
+            image_min_long_side=40,
+            image_jpeg_quality=70,
         )
 
-    assert extractor_calls == [], "make_extractor must NOT run with --no-cache-extract"
+    # Only format + summarize calls; no extract call.
+    assert len(completions.calls) == 2
     assert results[0].markdown == "re-formatted md"
     assert layout.page_format_path(1).read_text(encoding="utf-8") == "re-formatted md"
     assert layout.summary_path.exists()
@@ -270,80 +287,79 @@ def test_no_cache_extract_runs_formatter_only(
 def test_no_cache_extract_falls_through_when_extract_missing(
     tmp_path: Path,
 ) -> None:
-    page = _page(1)
+    """Without cached ``extract.txt`` the extract-short-circuit must fall
+    through to the full pipeline (extract → format)."""
+    page = _page(1, tmp_path)
     layout = _layout(tmp_path, 1)
-    # No extract.txt on disk → must fall through to full pipeline.
 
-    extract_t = _FakeTask(raw="fresh extract")
-    format_t = _FakeTask(raw="fresh md")
+    completions = _FakeCompletions(
+        responses=["fresh extract", "fresh md"]
+    )
+    fake = _FakeClient(completions)
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task"), \
-         patch.object(runner, "Crew") as crew_cls:
-        crew_cls.return_value.kickoff = lambda: None
+    with patch.object(runner, "_make_client", return_value=fake):
         results = run_pipeline(
             pages=[page],
             layout=layout,
             with_summary=False,
             no_cache=CacheNoCacheFlags(extract=True),
             text_hint=False,
-            llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
                 max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
+            image_long_side=40,
+            image_min_long_side=40,
+            image_jpeg_quality=70,
         )
 
+    assert len(completions.calls) == 2
     assert results[0].markdown == "fresh md"
 
 
 def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
-    page = _page(1)
+    """When ``format.md`` is on disk and trusted, no LLM call is made."""
+    page = _page(1, tmp_path)
     layout = _layout(tmp_path, 1)
     _seed_complete_page(layout, 1)
 
-    kickoff_calls: list[None] = []
+    completions = _FakeCompletions(responses=[])
+    fake = _FakeClient(completions)
 
-    def _track() -> None:
-        kickoff_calls.append(None)
-
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_extract_task"), \
-         patch.object(runner, "make_format_task"), \
-         patch.object(runner, "Crew") as crew_cls:
-        crew_cls.return_value.kickoff = _track
+    with patch.object(runner, "_make_client", return_value=fake):
         results = run_pipeline(
             pages=[page],
             layout=layout,
             with_summary=False,
             no_cache=CacheNoCacheFlags(),
             text_hint=False,
-            llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
                 max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
+            image_long_side=40,
+            image_min_long_side=40,
+            image_jpeg_quality=70,
         )
 
-    assert kickoff_calls == [], "trusting format.md must short-circuit the pipeline"
+    assert completions.calls == [], (
+        "trusting format.md must short-circuit the pipeline (zero LLM calls)"
+    )
     assert results[0].markdown == "final md"
 
 
 def test_no_cache_summary_does_not_seed(tmp_path: Path) -> None:
-    page = _page(1)
+    """``--no-cache-summary`` ignores pre-existing summary.json on disk."""
+    page = _page(1, tmp_path)
     layout = _layout(tmp_path, 1)
-    # Pre-existing summary.json must be ignored when --no-cache-summary is set.
     layout.summary_path.write_text(
         '{"summary": "stale carry-over"}', encoding="utf-8"
     )
 
-    extract_t = _FakeTask(raw="new extract")
-    format_t = _FakeTask(raw="new md")
-    summarize_t = _FakeTask(raw="new summary text")
+    completions = _FakeCompletions(
+        responses=["new extract", "new md", "new summary text"]
+    )
+    fake = _FakeClient(completions)
 
     written: list[Path] = []
 
@@ -351,26 +367,23 @@ def test_no_cache_summary_does_not_seed(tmp_path: Path) -> None:
         written.append(path)
 
     with patch.object(runner, "write_summary", side_effect=_track_write), \
-         patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_summarizer"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task", return_value=summarize_t), \
-         patch.object(runner, "Crew") as crew_cls:
-        crew_cls.return_value.kickoff = lambda: None
+         patch.object(runner, "_make_client", return_value=fake):
         run_pipeline(
             pages=[page],
             layout=layout,
             with_summary=True,
             no_cache=CacheNoCacheFlags(summary=True),
             text_hint=False,
-            llm=object(),  # type: ignore[arg-type]
             retry_config=RetryConfig(
                 max_attempts=1, initial_delay=0.001, jitter=0.0
             ),
             fallback_to_text=True,
+            image_long_side=40,
+            image_min_long_side=40,
+            image_jpeg_quality=70,
         )
 
-    assert written == [], "summary.json must NOT be written when --no-cache-summary is set"
+    assert written == [], (
+        "summary.json must NOT be written when --no-cache-summary is set"
+    )
     assert layout.summary_path.read_text(encoding="utf-8") == '{"summary": "stale carry-over"}'

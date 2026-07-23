@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pdf2md_agent import cli
+from pdf2md_agent import cli, raw_pipeline
 from pdf2md_agent.cache import (
     CacheCorruptedError,
     CacheLayout,
@@ -21,10 +21,8 @@ from pdf2md_agent.cache import (
 )
 from pdf2md_agent.cli import _atomic_write_text, _safe_cache_stem, _safe_intermediates_dir
 from pdf2md_agent.config import MODEL_NAME
-from pdf2md_agent.crew import agents
-from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
-from pdf2md_agent.crew.runner import _strip_think
 from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
+from pdf2md_agent.raw_pipeline import ImageEncodeError, _encode_local_image, _strip_think
 
 
 # --- CacheLayout ----------------------------------------------------------
@@ -162,7 +160,7 @@ def test_cli_parse_known_args() -> None:
     assert args.no_text_hint is False
     assert args.no_fallback_to_text is False
     assert args.model == MODEL_NAME
-    assert args.persona_version == agents.PERSONA_VERSION
+    assert args.persona_version == raw_pipeline.PERSONA_VERSION
 
 
 def test_help_lists_argument_groups() -> None:
@@ -178,13 +176,13 @@ def test_help_lists_argument_groups() -> None:
 def test_persona_version_hashes_active_personas() -> None:
     joined = "\x00".join(
         (
-            agents.EXTRACTOR_PERSONA,
-            agents.FORMATTER_PERSONA_STRICT,
-            agents.SUMMARIZER_PERSONA,
+            raw_pipeline.EXTRACTOR_PERSONA,
+            raw_pipeline.FORMATTER_PERSONA_STRICT,
+            raw_pipeline.SUMMARIZER_PERSONA,
         )
     )
-    assert agents.PERSONA_VERSION == hashlib.sha256(joined.encode()).hexdigest()[:16]
-    assert "PERSONA_VERSION" in agents.__all__
+    assert raw_pipeline.PERSONA_VERSION == hashlib.sha256(joined.encode()).hexdigest()[:16]
+    assert "PERSONA_VERSION" in raw_pipeline.__all__
 
 
 def test_cli_parse_pages_spec() -> None:
@@ -364,7 +362,6 @@ def test_meta_fingerprint_drift_refuses_run(tmp_path: Path, caplog, monkeypatch)
             captured["stderr"] += msg + "\n"
 
     with patch.object(cli, "_render_pages", return_value=[]), \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[]), \
          patch.object(cli, "stitch_pages", return_value=""), \
          patch("builtins.print", side_effect=_capture_print):
@@ -405,7 +402,6 @@ def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
     with patch.object(cli, "_render_pages", return_value=[]), \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[]), \
          patch.object(cli, "stitch_pages", return_value=""):
         rc = cli.main([
