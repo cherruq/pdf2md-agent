@@ -7,10 +7,12 @@ Targets (per findings.md):
 - D8-007  ``runner._resize_page_png`` (Pillow resize, long-side applied)
 - D8-009  ``runner._record_text_layer_fallback`` (extract.txt + format.md writes)
 - D8-010  ``runner._text_layer_fallback`` (markdown stub shape)
-- D8-011  ``runner._output`` (attribute extraction)
-- D8-014  ``multimodal_patch._encode_local_image`` (JPEG bytes shape)
-- D8-015  ``multimodal_patch._to_data_url`` (data-URL wrapping + pass-through)
-- D8-016  ``multimodal_patch._to_sentinel`` (VISION_IMAGE: prefix + b64 round-trip)
+- D8-014  ``raw_pipeline._encode_local_image`` (JPEG bytes shape)
+
+``runner._output`` and ``multimodal_patch._to_data_url`` / ``_to_sentinel``
+were dropped when the CrewAI runner was replaced by explicit
+``pdf2md_agent.raw_pipeline`` calls (the corresponding tests were removed
+along with the functions).
 
 D8-002 ``cli._atomic_write_text`` (alias for ``cache.atomic_write_text``) is
 already covered transitively by ``tests/test_misc_coverage.py::test_atomic_write_*``
@@ -22,10 +24,9 @@ test sits next to the seam it guards).
 from __future__ import annotations
 
 import argparse
-import base64
 import io
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pymupdf
 import pytest
@@ -34,20 +35,15 @@ from PIL import Image
 from pdf2md_agent import cli
 from pdf2md_agent.cache import CacheLayout
 from pdf2md_agent.cli import _resolve_layout
-from pdf2md_agent.crew import agents
-from pdf2md_agent.crew.multimodal_patch import (
-    _encode_local_image,
-    _to_data_url,
-    _to_sentinel,
-)
 from pdf2md_agent.crew.runner import (
     PageResult,
-    _output,
     _record_text_layer_fallback,
     _resize_page_png,
     _text_layer_fallback,
 )
 from pdf2md_agent.pdf_renderer import PageImage
+from pdf2md_agent.raw_pipeline import _encode_local_image
+from pdf2md_agent import raw_pipeline
 
 
 # --- helpers ---------------------------------------------------------------
@@ -163,8 +159,8 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         ctx_limit=None,
         stitch_mode="heuristic",
         request_timeout=None,
-        model=agents.PERSONA_VERSION,
-        persona_version=agents.PERSONA_VERSION,
+        model=raw_pipeline.PERSONA_VERSION,
+        persona_version=raw_pipeline.PERSONA_VERSION,
     )
 
 
@@ -186,7 +182,6 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     )
 
     with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[
              PageResult(page_number=1, markdown="# Title\n\n- item\n", summary="summary line"),
          ]) as mock_run, \
@@ -219,7 +214,6 @@ def test_cmd_convert_no_intermediates_does_not_emit_meta(
     )
 
     with patch.object(cli, "render_pdf", return_value=[page]), \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[
              PageResult(page_number=1, markdown="hi", summary=""),
          ]), \
@@ -271,7 +265,6 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
     layout = CacheLayout.for_pdf(tmp_path / ".pdf2md-agent-cache" / "in", pdf)
 
     with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[
              PageResult(page_number=1, markdown="stitched body", summary=""),
          ]), \
@@ -433,54 +426,15 @@ def test_text_layer_fallback_strips_text_layer_whitespace(tmp_path: Path) -> Non
     assert "no content recovered" in md
 
 
-# ===========================================================================
-# D8-011 — runner._output
-# ===========================================================================
-
-
-def test_output_extracts_raw_from_nested_object() -> None:
-    """Standard CrewAI ``TaskOutput`` shape: ``task.output.raw`` -> the raw string."""
-    out_obj = MagicMock()
-    out_obj.raw = "page text 1\n"
-    task = MagicMock(spec=["output"])
-    task.output = out_obj
-
-    assert _output(task) == "page text 1"
-
-
-def test_output_returns_empty_string_when_output_attr_missing() -> None:
-    """Tasks that never produced output (``task.output is None``) -> empty string."""
-    task = MagicMock(spec=["output"])
-    task.output = None
-    assert _output(task) == ""
-
-
-def test_output_strips_think_blocks_from_raw() -> None:
-    """``_output`` runs ``_strip_think`` defensively on the raw payload."""
-    out_obj = MagicMock()
-    out_obj.raw = "before<think>scratch</think>after"
-    task = MagicMock(spec=["output"])
-    task.output = out_obj
-    assert _output(task) == "beforeafter"
-
-
-def test_output_falls_back_to_str_when_raw_is_not_string() -> None:
-    """Legacy/shim output objects without a ``raw`` string are stringified."""
-    out_obj = MagicMock(spec=["raw"])
-    out_obj.raw = 12345
-    task = MagicMock(spec=["output"])
-    task.output = out_obj
-    result = _output(task)
-    assert isinstance(result, str)
-    assert result
-
 
 # ===========================================================================
-# D8-014 / D8-015 / D8-016 — multimodal_patch encoding helpers
+# D8-011 — runner._output  (deleted; CrewAI runner replaced by raw_pipeline)
 # ===========================================================================
 
 
-# --- D8-014 ---
+# ===========================================================================
+# D8-014 — raw_pipeline._encode_local_image
+# ===========================================================================
 
 
 def test_encode_local_image_produces_valid_jpeg_bytes(tmp_path: Path) -> None:
@@ -504,98 +458,6 @@ def test_encode_local_image_respects_target_long_side(tmp_path: Path) -> None:
         w, h = img.size
     assert max(w, h) == 150
     assert min(w, h) <= 150
-
-
-# --- D8-015 ---
-
-
-def test_to_data_url_wraps_local_image_as_data_url(tmp_path: Path) -> None:
-    """A real local image becomes ``data:image/jpeg;base64,<b64>``."""
-    src = _write_png(tmp_path / "page.png", width=48, height=48)
-
-    url = _to_data_url(str(src), target_long_side=48, jpeg_quality=80)
-
-    assert url.startswith("data:image/jpeg;base64,")
-    # The b64 suffix is valid base64 and decodes back to JPEG bytes.
-    b64 = url.split(",", 1)[1]
-    decoded = base64.b64decode(b64, validate=True)
-    assert decoded[:3] == b"\xff\xd8\xff"
-
-
-@pytest.mark.parametrize(
-    "remote",
-    [
-        "http://example.test/img.png",
-        "https://example.test/img.png",
-        "data:image/png;base64,AAAAAAAA",
-    ],
-)
-def test_to_data_url_passes_remote_values_through_unchanged(remote: str) -> None:
-    """HTTP(S) and ``data:`` inputs are returned verbatim — never re-encoded."""
-    assert _to_data_url(remote, target_long_side=1536, jpeg_quality=85) == remote
-
-
-def test_to_data_url_returns_unknown_path_unchanged(tmp_path: Path) -> None:
-    """A path that doesn't resolve to a file is returned as-is (no exception)."""
-    missing = tmp_path / "no-such.png"
-    assert _to_data_url(str(missing)) == str(missing)
-
-
-def test_to_data_url_empty_string_returns_empty(tmp_path: Path) -> None:
-    """Empty input -> empty output (defensive guard)."""
-    assert _to_data_url("") == ""
-
-
-# --- D8-016 ---
-
-
-def test_to_sentinel_format_with_action(tmp_path: Path) -> None:
-    """Sentinel shape: ``<action>\\nVISION_IMAGE:<media_type>:<b64>`` for local images."""
-    missing = tmp_path / "no-such.png"
-    sentinel = _to_sentinel(
-        str(missing),
-        action="describe this page",
-        target_long_side=64,
-        jpeg_quality=70,
-    )
-    assert sentinel == "describe this page"
-
-
-def test_to_sentinel_format_without_action(tmp_path: Path) -> None:
-    """Sentinel shape for a local image: ``VISION_IMAGE:image/jpeg:<b64>``."""
-    src = _write_png(tmp_path / "page.png", width=64, height=64)
-
-    sentinel = _to_sentinel(str(src), action=None, target_long_side=64, jpeg_quality=80)
-
-    assert sentinel.startswith("VISION_IMAGE:image/jpeg:")
-    assert sentinel.split(":")[1] == "image/jpeg"
-    b64 = sentinel.rsplit(":", 1)[-1]
-    decoded = base64.b64decode(b64, validate=True)
-    assert decoded[:3] == b"\xff\xd8\xff"
-
-
-def test_to_sentinel_b64_decodes_round_trip(tmp_path: Path) -> None:
-    """The b64 suffix decodes to a valid JPEG and the bytes re-open in Pillow."""
-    src = _write_png(tmp_path / "x.png", width=32, height=32, color="blue")
-    sentinel = _to_sentinel(str(src), action=None, target_long_side=32, jpeg_quality=70)
-    b64 = sentinel.rsplit(":", 1)[-1]
-    decoded = base64.b64decode(b64)
-    with Image.open(io.BytesIO(decoded)) as img:
-        assert img.format == "JPEG"
-        assert img.size == (32, 32)
-
-
-def test_to_sentinel_returns_action_or_fallback_for_remote_url() -> None:
-    """URL inputs (no inline) yield the action text (or a clear fallback message)."""
-    # With action: action text is surfaced.
-    assert (
-        _to_sentinel("https://example.test/x.png", action="caption text")
-        == "caption text"
-    )
-    # Without action: a clear '(could not inline image at <url>)' marker.
-    sentinel = _to_sentinel("https://example.test/x.png", action=None)
-    assert "could not inline image" in sentinel
-    assert "https://example.test/x.png" in sentinel
 
 
 def test_call_with_retry_treats_timeout_as_transient(caplog) -> None:
