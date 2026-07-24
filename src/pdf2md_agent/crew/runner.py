@@ -220,11 +220,6 @@ def run_pipeline(
     """
     if ctx_limit <= 0:
         ctx_limit = resolve_ctx_limit()
-    extractor: Agent | None = None
-    formatter = make_formatter(llm)
-    summarizer: Agent | None = None
-    if with_summary:
-        summarizer = make_summarizer(llm)
 
     patch_add_image_tool(
         target_long_side=image_long_side,
@@ -307,11 +302,10 @@ def run_pipeline(
                 page.page_number,
             )
 
-        if extractor is None:
-            extractor = make_extractor(llm)
-        if formatter is None:
-            formatter = make_formatter(llm)
-        if summarizer is None and with_summary:
+        extractor = make_extractor(llm)
+        formatter = make_formatter(llm)
+        summarizer = None
+        if with_summary:
             summarizer = make_summarizer(llm)
 
         text_hint_str = (
