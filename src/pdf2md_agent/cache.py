@@ -169,12 +169,20 @@ def write_meta(
     means the cached outputs no longer correspond to the current pipeline
     configuration, so the runner fails loud instead of silently re-using
     stale data.
+
+    ``pdf`` is canonicalized via :meth:`Path.resolve` before serialization
+    so the on-disk fingerprint is always a stable realpath. Otherwise a
+    follow-up run invoked from a different working directory (or with a
+    different relative-path spelling of the same file) would see the cached
+    value drift away from the current run's value purely due to path
+    formatting, even though the underlying file is identical.
     """
+    canonical_pdf = pdf.resolve()
     atomic_write_text(
         meta_path,
         json.dumps(
             {
-                "pdf": str(pdf),
+                "pdf": str(canonical_pdf),
                 "dpi": dpi,
                 "with_summary": with_summary,
                 "pages": pages,
