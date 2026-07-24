@@ -176,6 +176,9 @@ def write_meta(
     different relative-path spelling of the same file) would see the cached
     value drift away from the current run's value purely due to path
     formatting, even though the underlying file is identical.
+
+    Symlinks are followed by :meth:`Path.resolve`; a symlink PDF and its
+    real-path target therefore canonicalize to the same stored value.
     """
     canonical_pdf = pdf.resolve()
     atomic_write_text(
