@@ -53,12 +53,27 @@ _COMMON_TASK_RULES: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
 TASKS_RULES_TEXT: str = _COMMON_TASK_RULES
 
 
-def extract_task_intro(page_path: Path) -> str:
-    return (
-        f"Call your add_image tool with image_url=`{page_path}` to attach "
-        f"the rendered page image, then transcribe its full content "
-        f"into raw markdown.\n\n"
-    )
+def extract_task_intro(page_path: Path, available_images: list[str] = None, is_tiled: bool = False, tile_paths: list[Path] = None) -> str:
+    if is_tiled and tile_paths:
+        tile_str = ", ".join(f"`{p}`" for p in tile_paths)
+        intro = (
+            f"This page was too large and has been split into tiles. "
+            f"Call your add_image tool with image_url on each of these paths: {tile_str}. "
+            f"Then transcribe their combined full content into raw markdown.\n\n"
+        )
+    else:
+        intro = (
+            f"Call your add_image tool with image_url=`{page_path}` to attach "
+            f"the rendered page image, then transcribe its full content "
+            f"into raw markdown.\n\n"
+        )
+    if available_images:
+        images_str = ", ".join(f"`{img}`" for img in available_images)
+        intro += (
+            f"Note: The following native images were extracted from this page and are available "
+            f"in the assets directory if you need to reference them: {images_str}.\n\n"
+        )
+    return intro
 
 
 def _truncate_summary(text: str, max_chars: int) -> str:
@@ -118,6 +133,9 @@ def build_extract_description(
     previous_summary: str,
     *,
     max_summary_chars: int = MAX_SUMMARY_CHARS,
+    available_images: list[str] = None,
+    is_tiled: bool = False,
+    tile_paths: list[Path] = None,
 ) -> str:
     """Build the exact description string the extract task sends to the LLM.
 
@@ -130,7 +148,7 @@ def build_extract_description(
     return (
         f"{_summary_block(safe_summary)}"
         f"{_text_hint_block(text_hint)}"
-        f"{extract_task_intro(page_path)}"
+        f"{extract_task_intro(page_path, available_images, is_tiled, tile_paths)}"
         f"{TASKS_RULES_TEXT}"
     )
 
@@ -142,6 +160,9 @@ def make_extract_task(
     previous_summary: str = "",
     *,
     max_summary_chars: int = MAX_SUMMARY_CHARS,
+    available_images: list[str] = None,
+    is_tiled: bool = False,
+    tile_paths: list[Path] = None,
 ) -> Task:
     """Create the page-extraction task with image + text hint + cross-page context."""
     description = build_extract_description(
@@ -149,6 +170,9 @@ def make_extract_task(
         text_hint,
         previous_summary,
         max_summary_chars=max_summary_chars,
+        available_images=available_images,
+        is_tiled=is_tiled,
+        tile_paths=tile_paths,
     )
     return Task(
         description=description,
