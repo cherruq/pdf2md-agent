@@ -105,6 +105,38 @@ def test_write_meta_persists_all_six_fields(tmp_path: Path) -> None:
     }
 
 
+def test_write_meta_canonicalizes_relative_pdf_to_realpath(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a relative-path input must be canonicalized via
+    :meth:`Path.resolve` before serialization. Otherwise a follow-up run
+    invoked from a different cwd (or with a different relative spelling of
+    the same file) sees the on-disk ``pdf`` field drift away from the
+    current run's ``pdf.resolve()`` even though the underlying file is
+    identical — producing a false-positive cache-fingerprint rejection.
+    """
+    meta = tmp_path / "meta.json"
+    # ``tmp_path`` is absolute on every supported platform, so chdir into
+    # a nested subdir to make any non-resolved input visibly relative.
+    workdir = tmp_path / "sub"
+    workdir.mkdir()
+    real_input = tmp_path / "input.pdf"
+    monkeypatch.chdir(workdir)
+
+    write_meta(
+        meta,
+        pdf=Path("../input.pdf"),
+        dpi=144,
+        with_summary=True,
+        model="MiniMax-M3",
+        persona_version="0123456789abcdef",
+    )
+
+    payload = json.loads(meta.read_text(encoding="utf-8"))
+    assert payload["pdf"] == str(real_input.resolve())
+    assert Path(payload["pdf"]).is_absolute()
+
+
 def test_read_meta_missing_returns_none(tmp_path: Path) -> None:
     assert cache.read_meta(tmp_path / "missing.json") is None
 
