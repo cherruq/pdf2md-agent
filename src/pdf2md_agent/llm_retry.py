@@ -16,18 +16,18 @@ just burns the budget and re-fails identically.
 The runner wraps each per-page ``crew.kickoff()`` in :func:`call_with_retry`
 and, on retry exhaustion, hands the page off to a fallback path that emits
 markdown from the PDF's native text layer (no vision model required).
+
+Public API: :class:`RetryConfig`, :func:`is_transient`, :func:`call_with_retry`.
 """
 from __future__ import annotations
 
 import logging
 import secrets
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable, TypeVar
-
-# secrets.SystemRandom (vs random) so retry backoffs cannot sync across clients.
-_RNG = secrets.SystemRandom()
 
 from openai import (
     APIConnectionError,
@@ -36,6 +36,18 @@ from openai import (
     InternalServerError,
     RateLimitError,
 )
+
+
+# ``secrets.SystemRandom`` (not ``random``) so retry backoffs cannot sync
+# across parallel clients.
+_RNG = secrets.SystemRandom()
+
+T_co = TypeVar("T_co")
+
+log = logging.getLogger("pdf2md_agent.llm_retry")
+
+
+# --- Exception classification ----------------------------------------------
 
 
 def _safe_exc_summary(exc: BaseException) -> str:
@@ -53,9 +65,30 @@ def _safe_exc_summary(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-log = logging.getLogger("pdf2md_agent.llm_retry")
+_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    APITimeoutError,
+    APIConnectionError,
+    InternalServerError,
+    RateLimitError,
+)
+"""Concrete transient exception types we always retry. ``APIStatusError``
+is handled separately (only when the status code is 5xx; 4xx is permanent)."""
 
-T_co = TypeVar("T_co")
+
+def is_transient(exc: BaseException) -> bool:
+    """Return True if ``exc`` represents a transient failure worth retrying.
+
+    Permanent client errors (400/401/403/404/422) return False — retrying
+    them produces an identical failure and wastes the budget.
+    """
+    if isinstance(exc, _TRANSIENT_EXCEPTIONS):
+        return True
+    if isinstance(exc, APIStatusError) and exc.status_code >= 500:
+        return True
+    return False
+
+
+# --- Retry configuration ---------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +127,9 @@ class RetryConfig:
             raise ValueError("jitter must be in [0.0, 1.0]")
 
 
+# --- Backoff math ----------------------------------------------------------
+
+
 def _fibonacci_multipliers() -> Iterator[int]:
     """Yield Fibonacci numbers 1, 1, 2, 3, 5, 8, ... ad infinitum.
 
@@ -106,27 +142,71 @@ def _fibonacci_multipliers() -> Iterator[int]:
         a, b = b, a + b
 
 
-# Concrete transient exception types we always retry. ``APIStatusError`` is
-# handled separately (only when the status code is 5xx; 4xx is permanent).
-_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    APITimeoutError,
-    APIConnectionError,
-    InternalServerError,
-    RateLimitError,
-)
+def _compute_fibonacci_wait(config: RetryConfig, multiplier: int) -> float:
+    """Cap-and-jitter one backoff delay.
 
-
-def is_transient(exc: BaseException) -> bool:
-    """Return True if ``exc`` represents a transient failure worth retrying.
-
-    Permanent client errors (400/401/403/404/422) return False — retrying
-    them produces an identical failure and wastes the budget.
+    ``uncapped`` is the Fibonacci-scaled delay; ``jittered`` perturbs it
+    by ``±jitter``; the result is clamped to ``[0, max_delay]``.
     """
-    if isinstance(exc, _TRANSIENT_EXCEPTIONS):
-        return True
-    if isinstance(exc, APIStatusError) and exc.status_code >= 500:
-        return True
-    return False
+    uncapped = config.initial_delay * multiplier
+    jittered = uncapped * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
+    return max(0.0, min(jittered, config.max_delay))
+
+
+# --- Timeout guard ---------------------------------------------------------
+
+
+class _TimeoutCause(Exception):
+    """Internal marker: distinguishes a timeout-guard hit from caller raises."""
+
+
+def _dummy_request() -> object:
+    """Placeholder httpx request used to satisfy ``APITimeoutError(request=…)``."""
+    import httpx
+
+    return httpx.Request("GET", "https://example.test/")
+
+
+def _call_with_timeout(
+    fn: Callable[[], T_co],
+    timeout_seconds: float,
+) -> T_co:
+    """Run ``fn()`` on a daemon thread; raise :class:`_TimeoutCause` on overrun.
+
+    A previous implementation wrapped a one-shot
+    :class:`concurrent.futures.ThreadPoolExecutor` in a ``with`` block. The
+    block's ``__exit__`` calls ``executor.shutdown(wait=True)`` which
+    blocks the caller until the worker thread completes — so when ``fn``
+    hangs the timeout-guard raised its marker exception only **after** the
+    hung call had already finished, defeating the whole point of the
+    wall-clock guard. We now spawn a ``daemon=True`` thread per call and
+    ``join(timeout=...)`` on it. The caller returns as soon as the timeout
+    fires; the abandoned worker keeps running but is killed on process
+    exit (daemon=True). The SDK's own ``timeout`` argument forwarded to
+    the LLM call eventually unblocks the inner I/O, so the orphan
+    thread is short-lived in practice.
+    """
+    holder: list[object] = [None, None, False]
+
+    def _runner() -> None:
+        try:
+            holder[0] = fn()
+        except BaseException as exc:  # noqa: BLE001 — re-raised by the joiner below
+            holder[1] = exc
+        finally:
+            holder[2] = True
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    if not holder[2]:
+        raise _TimeoutCause()
+    if holder[1] is not None:
+        raise holder[1]
+    return holder[0]
+
+
+# --- Public entry point ----------------------------------------------------
 
 
 def call_with_retry(
@@ -163,16 +243,9 @@ def call_with_retry(
     last_exc: Exception | None = None
     fib_multipliers = _fibonacci_multipliers()
     attempt = 0
-    # Only exits: ``return`` (success) or ``raise`` (terminal transient
-    # exhaustion / non-transient propagation). Infinite when max_attempts=None.
     while config.max_attempts is None or attempt < config.max_attempts:
         attempt += 1
-        log.info(
-            "%s: attempt %d/%s started",
-            label,
-            attempt,
-            bound,
-        )
+        log.info("%s: attempt %d/%s started", label, attempt, bound)
         try:
             if timeout_seconds is None:
                 return fn()
@@ -181,31 +254,16 @@ def call_with_retry(
             _ = exc
             log.warning(
                 "%s: attempt %d/%s timed out after %.1fs; treating as transient",
-                label,
-                attempt,
-                bound,
-                timeout_seconds,
+                label, attempt, bound, timeout_seconds,
             )
             last_exc = APITimeoutError(request=_dummy_request())
             if config.max_attempts is not None and attempt >= config.max_attempts:
                 log.error(
                     "%s: giving up after %d attempt(s): %s",
-                    label,
-                    attempt,
-                    _safe_exc_summary(last_exc),
+                    label, attempt, _safe_exc_summary(last_exc),
                 )
                 raise last_exc
-            wait = _compute_fibonacci_wait(config, next(fib_multipliers))
-            log.info(
-                "%s: retrying after transient %s on attempt %d/%s (%s); sleeping %.2fs",
-                label,
-                "Timeout",
-                attempt,
-                bound,
-                _safe_exc_summary(last_exc),
-                wait,
-            )
-            sleep(wait)
+            _sleep_and_continue(label, attempt, bound, last_exc, config, fib_multipliers, sleep)
         except Exception as exc:  # noqa: BLE001 — predicate is `is_transient` below
             if not is_transient(exc):
                 raise
@@ -213,82 +271,32 @@ def call_with_retry(
             if config.max_attempts is not None and attempt >= config.max_attempts:
                 log.error(
                     "%s: giving up after %d attempt(s): %s",
-                    label,
-                    attempt,
-                    _safe_exc_summary(exc),
+                    label, attempt, _safe_exc_summary(exc),
                 )
                 raise
-            wait = _compute_fibonacci_wait(config, next(fib_multipliers))
-            log.info(
-                "%s: retrying after transient %s on attempt %d/%s (%s); sleeping %.2fs",
-                label,
-                type(exc).__name__,
-                attempt,
-                bound,
-                _safe_exc_summary(exc),
-                wait,
-            )
-            sleep(wait)
+            _sleep_and_continue(label, attempt, bound, exc, config, fib_multipliers, sleep)
     if last_exc is None:
         raise RuntimeError("unreachable: retry loop must set last_exc")
     raise last_exc  # pragma: no cover
 
 
-def _compute_fibonacci_wait(config: RetryConfig, multiplier: int) -> float:
-    uncapped = config.initial_delay * multiplier
-    jittered = uncapped * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
-    return max(0.0, min(jittered, config.max_delay))
-
-
-class _TimeoutCause(Exception):
-    """Internal marker: distinguishes a timeout-guard hit from caller raises."""
-
-
-def _call_with_timeout(
-    fn: Callable[[], T_co],
-    timeout_seconds: float,
-) -> T_co:
-    """Run ``fn()`` on a daemon thread; raise :class:`_TimeoutCause` on overrun.
-
-    A previous implementation wrapped a one-shot
-    :class:`concurrent.futures.ThreadPoolExecutor` in a ``with`` block. The
-    block's ``__exit__`` calls ``executor.shutdown(wait=True)`` which
-    blocks the caller until the worker thread completes — so when ``fn``
-    hangs the timeout-guard raised its marker exception only **after** the
-    hung call had already finished, defeating the whole point of the
-    wall-clock guard. We now spawn a ``daemon=True`` thread per call and
-    ``join(timeout=...)`` on it. The caller returns as soon as the timeout
-    fires; the abandoned worker keeps running but is killed on process
-    exit (daemon=True). The SDK's own ``timeout`` argument forwarded to
-    the LLM call eventually unblocks the inner I/O, so the orphan
-    thread is short-lived in practice.
-    """
-    import threading
-
-    holder: list[object] = [None, None, False]
-
-    def _runner() -> None:
-        try:
-            holder[0] = fn()
-        except BaseException as exc:  # noqa: BLE001 — re-raised by the joiner below
-            holder[1] = exc
-        finally:
-            holder[2] = True
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_seconds)
-    if not holder[2]:
-        raise _TimeoutCause()
-    if holder[1] is not None:
-        raise holder[1]
-    return holder[0]
-
-
-def _dummy_request() -> object:
-    import httpx
-
-    return httpx.Request("GET", "https://example.test/")
+def _sleep_and_continue(
+    label: str,
+    attempt: int,
+    bound: str,
+    exc: BaseException,
+    config: RetryConfig,
+    fib_multipliers: Iterator[int],
+    sleep: Callable[[float], None],
+) -> None:
+    """Log a transient retry, sleep, and continue the loop."""
+    wait = _compute_fibonacci_wait(config, next(fib_multipliers))
+    log.info(
+        "%s: retrying after transient %s on attempt %d/%s (%s); sleeping %.2fs",
+        label, type(exc).__name__, attempt, bound,
+        _safe_exc_summary(exc), wait,
+    )
+    sleep(wait)
 
 
 __all__ = [

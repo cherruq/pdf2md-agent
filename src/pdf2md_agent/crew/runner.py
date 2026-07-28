@@ -1,26 +1,42 @@
-"""Per-page CrewAI runner: maintains running summary state, writes cache.
+"""Per-page CrewAI pipeline orchestrator.
 
-Budgets every extract call against :func:`plan_for_image`: when a raw page
-PNG would blow the model context window (e.g. a 184 KB 144 DPI PNG
-encoding to ~71 k base64 tokens), the page is downscaled to a JPEG copy
-under ``layout.pages_dir`` before the agent ever sees it.
+This module is the *coordinator*. It does not run CrewAI itself, plan
+image budgets, or build fallback markdown — those live in
+:mod:`pdf2md_agent.crew.extraction`,
+:mod:`pdf2md_agent.crew.page_image`, and
+:mod:`pdf2md_agent.crew.fallback` respectively. The runner's job is to
+thread the cache layout, the running summary, and the per-page outputs
+through those helpers in document order.
+
+The three short-circuit paths the runner handles directly:
+
+* **format trust** (``is_page_complete``): ``--no-cache-format`` unset
+  AND ``format.md`` + ``extract.txt`` already on disk → return cached
+  markdown verbatim, no LLM call.
+* **extract re-format** (``--no-cache-extract``): cached ``extract.txt``
+  exists and ``format.md`` is to be regenerated → run only the formatter
+  (+ optional summarizer) on the cached extract, skipping the vision
+  call entirely.
+* **full pipeline**: run extract → format → (optionally summarize) for
+  the page; on retry exhaustion or validation error fall back to the
+  PDF's text layer.
+
+Running summary state flows through the loop: a successful summarize
+task updates the in-memory summary, which is then (a) truncated to the
+budget, (b) persisted via ``write_summary`` so a follow-up run resumes
+from the right state.
 """
 from __future__ import annotations
 
 import logging
-import re
 import time
-import difflib
-from dataclasses import dataclass
-from pathlib import Path
 
-from crewai import Crew, LLM, Process
-from pydantic import ValidationError
+from crewai import LLM
 
 from pdf2md_agent.cache import (
+    FALLBACK_SENTINEL as _FALLBACK_SENTINEL,  # noqa: F401  re-exported under legacy underscore-prefixed name for test back-compat
     CacheLayout,
     CacheNoCacheFlags,
-    PageArtifacts,
     has_cached_extract,
     is_page_complete,
     read_summary,
@@ -32,380 +48,48 @@ from pdf2md_agent.config import (
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
     MODEL_NAME,
-    resolve_ctx_limit,
     TOKEN_BUDGET_SAFETY,
+    resolve_ctx_limit,
 )
-from pdf2md_agent.crew.agents import (
+from pdf2md_agent.crew.agents import (  # noqa: F401  re-exports kept for backward-compat with test surface
     EXTRACTOR_BACKSTORY,
     PERSONA_VERSION,
     make_extractor,
     make_formatter,
     make_summarizer,
 )
+from pdf2md_agent.crew.fallback import (  # noqa: F401  re-exports kept for backward-compat with test surface
+    _record_text_layer_fallback,
+    _text_layer_fallback,
+)
 from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
-from pdf2md_agent.crew.tasks import (
+from pdf2md_agent.crew.output import _output, _strip_think  # noqa: F401  re-exports kept for backward-compat with test surface
+from pdf2md_agent.crew.page_image import (  # noqa: F401  re-exports kept for backward-compat with test surface
+    _resize_page_png,
+    prepare_page_image,
+)
+from pdf2md_agent.crew.results import PageResult
+from pdf2md_agent.crew.tasks import (  # noqa: F401  re-exports kept for backward-compat with test surface
     _truncate_summary,
-    build_extract_description,
     make_extract_task,
     make_format_task,
     make_format_task_from_extract_file,
     make_summarize_task,
 )
-from pdf2md_agent.llm_retry import RetryConfig, call_with_retry, is_transient, _safe_exc_summary
-from pdf2md_agent.pdf_renderer import PageImage, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.render_pdf` without `create=True`
-from pdf2md_agent.token_budget import (
-    estimate_image_tokens,
-    estimate_text_tokens,
-    plan_for_image,
-)
+from crewai import Crew, Process  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.Crew` without `create=True`
+from pdf2md_agent.llm_retry import RetryConfig
+from pdf2md_agent.pdf_renderer import PageImage, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.PageImage` / `.render_pdf` without `create=True`
 from pdf2md_agent.vision import make_vision_llm  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.make_vision_llm` without `create=True`
 
 log = logging.getLogger("pdf2md_agent.runner")
-
-_THINK_OPEN = chr(60) + "think" + chr(62)
-_THINK_CLOSE = chr(60) + "/think" + chr(62)
-_THINK_BLOCK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
-
-
-def _strip_think(text: str) -> str:
-    """Remove inline model reasoning blocks from output.
-
-    Some models wrap their scratchpad in reasoning tags; the configured
-    MiniMax-M3 endpoint sometimes leaves them in the response. Strip them
-    defensively before downstream consumers see them.
-    """
-    return _THINK_BLOCK_RE.sub("", text).strip()
-
-
-def _output(output_text: object) -> str:
-    """Extract clean text from a CrewAI task's output."""
-    out = getattr(output_text, "output", None)
-    if out is None:
-        return ""
-    raw = getattr(out, "raw", None)
-    text = raw if isinstance(raw, str) else str(out)
-    return _strip_think(text)
-
-
-def _text_layer_fallback(artifacts: PageArtifacts) -> str:
-    """Build a best-effort markdown page from the PDF's native text layer.
-
-    Used when the vision model is unreachable after all retries. The page's
-    PNG is dropped from the output (we can't describe it) and the text is
-    emitted verbatim in a fenced block so reviewers can spot drift.
-    """
-    text = artifacts.page_text.read_text(encoding="utf-8").strip()
-    if not text:
-        return (
-            "*(vision model unavailable and PDF text layer is empty for this "
-            "page — no content recovered)*"
-        )
-    return (
-        "*(vision model unavailable — falling back to PDF text layer; "
-        "tables, figures, and layout are NOT preserved)*\n\n"
-        "```\n"
-        f"{text}\n"
-        "```\n"
-    )
-
-
-def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_quality: int) -> None:
-    """Render ``src`` to ``dst`` as a downscaled JPEG.
-
-    Uses the same LANCZOS resampler as
-    :func:`pdf2md_agent.crew.multimodal_patch._encode_local_image` so the
-    pre-resized cache file looks identical to what the in-memory patch
-    would produce inline.
-    """
-    from PIL import Image
-
-    with Image.open(src) as img:
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        img.thumbnail((target_long_side, target_long_side), Image.LANCZOS)
-        img.save(dst, "JPEG", quality=jpeg_quality, optimize=True)
-
-
-def _resized_cache_path(layout: CacheLayout, page_number: int) -> Path:
-    """Path for the downscaled JPEG copy of ``page_number``."""
-    return layout.pages_dir / f"page_{page_number:04d}_resized.jpg"
-
-
-def _record_text_layer_fallback(
-    *,
-    idx: int,
-    total: int,
-    page_number: int,
-    page_started: float,
-    artifacts: PageArtifacts,
-    summary: str,
-    completion_label: str,
-) -> PageResult:
-    format_md = _text_layer_fallback(artifacts)
-    artifacts.extract_text.write_text(
-        _FALLBACK_SENTINEL.format(page=page_number),
-        encoding="utf-8",
-    )
-    artifacts.format_markdown.write_text(format_md, encoding="utf-8")
-    elapsed = time.monotonic() - page_started
-    log.info(
-        "  [%d/%d] page %d: done in %.1fs (%s, %s chars)",
-        idx,
-        total,
-        page_number,
-        elapsed,
-        completion_label,
-        f"{len(format_md):,}",
-    )
-    return PageResult(page_number, format_md, summary)
-
-
-_FALLBACK_SENTINEL: str = (
-    "(vision model unavailable for page {page}; text-layer fallback emitted; "
-    "treat as sentinel — no extractor payload available)\n"
-)
-
-
-@dataclass(frozen=True, slots=True)
-class PageResult:
-    """One page's final markdown + the running summary after this page."""
-
-    page_number: int
-    markdown: str
-    summary: str
-
-
-
-def _strip_multipage_headers_footers(text: str, compare_text: str) -> str:
-    """Remove common prefixes and suffixes across pages to avoid coverage penalties."""
-    if not text or not compare_text:
-        return text
-
-    start_trim = 0
-    end_trim = len(text)
-
-    # Strip header: find common match at the very start
-    sm_head = difflib.SequenceMatcher(None, text[:200], compare_text[:200])
-    head_match = sm_head.find_longest_match(0, min(200, len(text)), 0, min(200, len(compare_text)))
-
-    if head_match.size > 5 and head_match.a < 20:
-        start_trim = head_match.a + head_match.size
-
-    # Strip footer: find common match at the very end
-    sm_tail = difflib.SequenceMatcher(None, text[-200:], compare_text[-200:])
-    tail_match = sm_tail.find_longest_match(0, min(200, len(text)), 0, min(200, len(compare_text)))
-
-    if tail_match.size > 5 and (len(text[-200:]) - (tail_match.a + tail_match.size)) < 20:
-        end_trim = max(start_trim, len(text) - 200 + tail_match.a)
-
-    if start_trim < end_trim:
-        trimmed = text[start_trim:end_trim].strip()
-        lines = trimmed.splitlines()
-        # Further strip any lines that are just numbers/dashes (page numbers) at the top or bottom
-        while lines and re.match(r'^\s*[\d\-]+\s*$', lines[0]):
-            lines.pop(0)
-        while lines and re.match(r'^\s*[\d\-]+\s*$', lines[-1]):
-            lines.pop(-1)
-        return "\n".join(lines)
-
-    return text
-
-def run_pipeline(
-    *,
-    pages: list[PageImage],
-    layout: CacheLayout,
-    with_summary: bool,
-    no_cache: CacheNoCacheFlags,
-    text_hint: bool,
-    llm: LLM,
-    retry_config: RetryConfig | None = None,
-    fallback_to_text: bool = True,
-    ctx_limit: int = 0,
-    image_long_side: int = IMAGE_LONG_SIDE,
-    image_min_long_side: int = IMAGE_MIN_LONG_SIDE,
-    image_jpeg_quality: int = IMAGE_JPEG_QUALITY,
-    max_summary_chars: int = MAX_SUMMARY_CHARS,
-    token_budget_safety: float = TOKEN_BUDGET_SAFETY,
-    dpi: int = 144,
-    request_timeout_seconds: float | None = None,
-    assets_dir: Path | None = None,
-) -> list[PageResult]:
-    """Run the per-page CrewAI pipeline across ``pages`` and return page results.
-
-    ``text_hint`` controls whether the native PDF text layer is fed to the
-    extractor agent as a per-page hint. Disabled → pass empty string.
-
-    ``retry_config`` controls transient-error retry around each page's
-    ``crew.kickoff()`` call. On exhaustion, if ``fallback_to_text`` is True,
-    the page is rendered as a fenced text-layer markdown stub so the rest of
-    the pipeline keeps moving; otherwise the exception propagates.
-
-    ``no_cache`` is the per-resource opt-out switch (see
-    :class:`pdf2md_agent.cache.CacheNoCacheFlags`). Every flag defaults to
-    ``False`` (trust cache). Setting ``no_cache.format`` short-circuits the
-    entire per-page pipeline when ``format.md`` exists. Setting
-    ``no_cache.extract`` (but not ``no_cache.format``) re-runs only the
-    formatter (+ summarizer) using the cached ``extract.txt``; pages whose
-    extract is missing fall through to the full pipeline.
-
-    The remaining keyword arguments are the token-budget knobs (see
-    :mod:`pdf2md_agent.config`). All have sensible defaults.
-
-    ``ctx_limit`` of 0 means "resolve at runtime" — the actual value comes
-    from :func:`pdf2md_agent.config.resolve_ctx_limit`, which consults the
-    env var, the ``/v1/models`` probe, and finally a hardcoded default.
-    """
-    if ctx_limit <= 0:
-        ctx_limit = resolve_ctx_limit()
-
-    patch_add_image_tool(
-        target_long_side=image_long_side,
-        jpeg_quality=image_jpeg_quality,
-    )
-
-    summary = ""
-    if not no_cache.summary:
-        summary = read_summary(layout.summary_path)
-    results: list[PageResult] = []
-    pipeline_started = time.monotonic()
-    total = len(pages)
-    fallback_pages: list[int] = []
-    log.info(
-        "pipeline started: pages=%d, dpi=%d, model=%s, persona=%s, "
-        "with_summary=%s, no_cache=%s",
-        total,
-        dpi,
-        MODEL_NAME,
-        PERSONA_VERSION,
-        with_summary,
-        no_cache.as_dict(),
-    )
-    phases = "extract + format + summarize" if with_summary else "extract + format"
-    pages_dir = layout.pages_dir
-    summary_path = layout.summary_path
-
-    extractor_persona_text = EXTRACTOR_BACKSTORY
-
-    for idx, page in enumerate(pages, start=1):
-        artifacts = layout.artifacts_for(page)
-
-        if not no_cache.format and is_page_complete(layout, page.page_number):
-            cached_md = artifacts.format_markdown.read_text(encoding="utf-8").strip()
-            log.info("  [%d/%d] page %d: cached, skipping", idx, total, page.page_number)
-            results.append(PageResult(page.page_number, cached_md, summary))
-            continue
-
-        if (
-            no_cache.extract
-            and not no_cache.format
-            and has_cached_extract(layout, page.page_number)
-        ):
-            page_started = time.monotonic()
-            log.info(
-                "  [%d/%d] page %d: no-cache-extract (cached extract, no image)",
-                idx,
-                total,
-                page.page_number,
-            )
-            fmt_out, summary, did_fallback = _run_format_summarize_only(
-                page_number=page.page_number,
-                artifacts=artifacts,
-                summary_in=summary,
-                summary_path=summary_path,
-                with_summary=with_summary,
-                llm=llm,
-                retry_config=retry_config,
-                fallback_to_text=fallback_to_text,
-                max_summary_chars=max_summary_chars,
-            )
-            elapsed = time.monotonic() - page_started
-            log.info(
-                "  [%d/%d] page %d: no-cache-extract done in %.1fs%s",
-                idx,
-                total,
-                page.page_number,
-                elapsed,
-                " (fallback)" if did_fallback else "",
-            )
-            artifacts.format_markdown.write_text(fmt_out, encoding="utf-8")
-            results.append(PageResult(page.page_number, fmt_out, summary))
-            continue
-        if no_cache.extract and not has_cached_extract(layout, page.page_number):
-            log.warning(
-                "  [%d/%d] page %d: extract.txt missing, "
-                "falling back to full extract+format",
-                idx,
-                total,
-                page.page_number,
-            )
-
-        extractor = make_extractor(llm)
-        formatter = make_formatter(llm)
-        summarizer = None
-        if with_summary:
-            summarizer = make_summarizer(llm)
-
-        text_hint_str = (
-            artifacts.page_text.read_text(encoding="utf-8") if text_hint else ""
-        )
-
-
-        attach_image_path, is_tiled, tile_paths, page_started = _prepare_page_image_and_budget(
-            page, layout, text_hint_str, summary, max_summary_chars, ctx_limit,
-            image_long_side, image_min_long_side, image_jpeg_quality, token_budget_safety,
-            idx, total, extractor_persona_text, phases
-        )
-
-        extract_text, format_md, summary_out, summarize_t = _run_extraction_with_reflection(
-            page, text_hint_str, summary, max_summary_chars, is_tiled, tile_paths,
-            attach_image_path, extractor, formatter, summarizer, retry_config, request_timeout_seconds,
-            fallback_to_text, artifacts, idx, total, page_started, results, fallback_pages, pages, assets_dir
-        )
-        if page.page_number in fallback_pages:
-            continue
-        artifacts.extract_text.write_text(extract_text, encoding="utf-8")
-        artifacts.format_markdown.write_text(format_md, encoding="utf-8")
-
-        if summarize_t is not None and not no_cache.summary and with_summary:
-            summary = summary_out
-            if len(summary) > max_summary_chars:
-                summary = _truncate_summary(summary, max_summary_chars)
-            write_summary(summary_path, summary)
-
-        elapsed = time.monotonic() - page_started
-        log.info(
-            "  [%d/%d] page %d: done in %.1fs (%s chars)",
-            idx,
-            total,
-            page.page_number,
-            elapsed,
-            f"{len(format_md):,}",
-        )
-        results.append(PageResult(page.page_number, format_md, summary))
-
-    total_elapsed = time.monotonic() - pipeline_started
-    log.info(
-        "pipeline complete: %d page(s) in %.1fs (%.1fs avg)",
-        total,
-        total_elapsed,
-        total_elapsed / max(total, 1),
-    )
-    if fallback_pages:
-        log.info(
-            "run complete: %d pages, %d used fallback (text layer): %s",
-            total,
-            len(fallback_pages),
-            fallback_pages,
-        )
-    return results
 
 
 def _run_format_summarize_only(
     *,
     page_number: int,
-    artifacts: PageArtifacts,
+    artifacts,
     summary_in: str,
-    summary_path: Path,
+    summary_path,
     with_summary: bool,
     llm: LLM,
     retry_config: RetryConfig,
@@ -429,6 +113,15 @@ def _run_format_summarize_only(
 
     Returns ``(format_md, summary_out, did_fallback)``.
     """
+    from pydantic import ValidationError
+
+    from pdf2md_agent.crew.output import _output
+    from pdf2md_agent.llm_retry import (
+        _safe_exc_summary,
+        call_with_retry,
+        is_transient,
+    )
+
     formatter = make_formatter(llm)
     format_t = make_format_task_from_extract_file(formatter, artifacts.extract_text)
 
@@ -467,17 +160,19 @@ def _run_format_summarize_only(
         if not fallback_to_text:
             raise
         log.warning(
-            "  page %d: no-cache-extract produced malformed output; writing extract.txt as-is",
+            "  page %d: no-cache-extract produced malformed output; "
+            "writing extract.txt as-is",
             page_number,
         )
         format_md = artifacts.extract_text.read_text(encoding="utf-8")
         summary_out = summary_in
         did_fallback = True
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 — see runner/AGENTS.md
         if not fallback_to_text or not is_transient(exc):
             raise
         log.warning(
-            "  page %d: no-cache-extract failed after retries (%s); writing extract.txt as-is",
+            "  page %d: no-cache-extract failed after retries (%s); "
+            "writing extract.txt as-is",
             page_number,
             _safe_exc_summary(exc),
         )
@@ -495,257 +190,212 @@ def _run_format_summarize_only(
     return format_md, summary_out, did_fallback
 
 
+def _phase_label(with_summary: bool) -> str:
+    return "extract + format + summarize" if with_summary else "extract + format"
+
+
+def run_pipeline(
+    *,
+    pages: list[PageImage],
+    layout: CacheLayout,
+    with_summary: bool,
+    no_cache: CacheNoCacheFlags,
+    text_hint: bool,
+    llm: LLM,
+    retry_config: RetryConfig | None = None,
+    fallback_to_text: bool = True,
+    ctx_limit: int = 0,
+    image_long_side: int = IMAGE_LONG_SIDE,
+    image_min_long_side: int = IMAGE_MIN_LONG_SIDE,
+    image_jpeg_quality: int = IMAGE_JPEG_QUALITY,
+    max_summary_chars: int = MAX_SUMMARY_CHARS,
+    token_budget_safety: float = TOKEN_BUDGET_SAFETY,
+    dpi: int = 144,
+    request_timeout_seconds: float | None = None,
+    assets_dir=None,
+) -> list[PageResult]:
+    """Run the per-page CrewAI pipeline across ``pages`` and return page results.
+
+    See module docstring for the three short-circuit paths. ``text_hint``
+    controls whether the native PDF text layer is fed to the extractor.
+    ``retry_config`` controls transient-error retry around each page's
+    ``crew.kickoff()`` call. ``ctx_limit`` of 0 means "resolve at runtime"
+    via :func:`pdf2md_agent.config.resolve_ctx_limit`.
+    """
+    if ctx_limit <= 0:
+        ctx_limit = resolve_ctx_limit()
+
+    # Lazy import to keep the runner ↔ extraction import order acyclic.
+    # extraction.py looks up make_extractor / make_formatter / make_summarizer /
+    # make_extract_task / make_format_task / make_summarize_task / Crew via
+    # this module so tests can patch them at ``pdf2md_agent.crew.runner.*``.
+    from pdf2md_agent.crew.extraction import run_extraction_loop
+
+    patch_add_image_tool(
+        target_long_side=image_long_side,
+        jpeg_quality=image_jpeg_quality,
+    )
+
+    summary = "" if no_cache.summary else read_summary(layout.summary_path)
+    results: list[PageResult] = []
+    pipeline_started = time.monotonic()
+    total = len(pages)
+    fallback_pages: list[int] = []
+    log.info(
+        "pipeline started: pages=%d, dpi=%d, model=%s, persona=%s, "
+        "with_summary=%s, no_cache=%s",
+        total, dpi, MODEL_NAME, PERSONA_VERSION,
+        with_summary, no_cache.as_dict(),
+    )
+    phases = _phase_label(with_summary)
+    extractor_persona_text = EXTRACTOR_BACKSTORY
+
+    for idx, page in enumerate(pages, start=1):
+        artifacts = layout.artifacts_for(page)
+
+        # Short-circuit 1: format.md + extract.txt both cached → trust.
+        if not no_cache.format and is_page_complete(layout, page.page_number):
+            cached_md = artifacts.format_markdown.read_text(encoding="utf-8").strip()
+            log.info(
+                "  [%d/%d] page %d: cached, skipping",
+                idx, total, page.page_number,
+            )
+            results.append(PageResult(page.page_number, cached_md, summary))
+            continue
+
+        # Short-circuit 2: --no-cache-extract with cached extract →
+        # re-format only, no vision call.
+        if (
+            no_cache.extract
+            and not no_cache.format
+            and has_cached_extract(layout, page.page_number)
+        ):
+            page_started = time.monotonic()
+            log.info(
+                "  [%d/%d] page %d: no-cache-extract (cached extract, no image)",
+                idx, total, page.page_number,
+            )
+            fmt_out, summary, did_fallback = _run_format_summarize_only(
+                page_number=page.page_number,
+                artifacts=artifacts,
+                summary_in=summary,
+                summary_path=layout.summary_path,
+                with_summary=with_summary,
+                llm=llm,
+                retry_config=retry_config,
+                fallback_to_text=fallback_to_text,
+                max_summary_chars=max_summary_chars,
+                request_timeout_seconds=request_timeout_seconds,
+            )
+            elapsed = time.monotonic() - page_started
+            log.info(
+                "  [%d/%d] page %d: no-cache-extract done in %.1fs%s",
+                idx, total, page.page_number, elapsed,
+                " (fallback)" if did_fallback else "",
+            )
+            artifacts.format_markdown.write_text(fmt_out, encoding="utf-8")
+            results.append(PageResult(page.page_number, fmt_out, summary))
+            continue
+        if no_cache.extract and not has_cached_extract(layout, page.page_number):
+            log.warning(
+                "  [%d/%d] page %d: extract.txt missing, "
+                "falling back to full extract+format",
+                idx, total, page.page_number,
+            )
+
+        # Full pipeline path.
+        text_hint_str = (
+            artifacts.page_text.read_text(encoding="utf-8") if text_hint else ""
+        )
+        prepared = prepare_page_image(
+            page=page,
+            layout=layout,
+            text_hint_str=text_hint_str,
+            summary=summary,
+            max_summary_chars=max_summary_chars,
+            ctx_limit=ctx_limit,
+            image_long_side=image_long_side,
+            image_min_long_side=image_min_long_side,
+            image_jpeg_quality=image_jpeg_quality,
+            token_budget_safety=token_budget_safety,
+            idx=idx, total=total,
+            extractor_persona_text=extractor_persona_text,
+            phases=phases,
+        )
+
+        outcome = run_extraction_loop(
+            page=page,
+            artifacts=artifacts,
+            layout=layout,
+            all_pages=pages,
+            idx=idx, total=total,
+            prepared=prepared,
+            text_hint_str=text_hint_str,
+            summary=summary,
+            with_summary=with_summary,
+            llm=llm,
+            retry_config=retry_config,
+            fallback_to_text=fallback_to_text,
+            max_summary_chars=max_summary_chars,
+            request_timeout_seconds=request_timeout_seconds,
+            assets_dir=assets_dir,
+        )
+
+        if outcome.fell_back:
+            assert outcome.page_result is not None
+            results.append(outcome.page_result)
+            fallback_pages.append(page.page_number)
+            continue
+
+        artifacts.extract_text.write_text(outcome.extract_text, encoding="utf-8")
+        artifacts.format_markdown.write_text(outcome.format_md, encoding="utf-8")
+
+        if outcome.summarize_t is not None and not no_cache.summary and with_summary:
+            summary = outcome.summary_out
+            if len(summary) > max_summary_chars:
+                summary = _truncate_summary(summary, max_summary_chars)
+            write_summary(layout.summary_path, summary)
+
+        elapsed = time.monotonic() - prepared.page_started
+        log.info(
+            "  [%d/%d] page %d: done in %.1fs (%s chars)",
+            idx, total, page.page_number, elapsed, f"{len(outcome.format_md):,}",
+        )
+        results.append(PageResult(page.page_number, outcome.format_md, summary))
+
+    total_elapsed = time.monotonic() - pipeline_started
+    log.info(
+        "pipeline complete: %d page(s) in %.1fs (%.1fs avg)",
+        total, total_elapsed, total_elapsed / max(total, 1),
+    )
+    if fallback_pages:
+        log.info(
+            "run complete: %d pages, %d used fallback (text layer): %s",
+            total, len(fallback_pages), fallback_pages,
+        )
+    return results
+
+
 __all__ = [
-    "PageImage",  # re-exported from pdf2md_agent.pdf_renderer
-    "PageResult",
-    "make_vision_llm",  # re-exported from pdf2md_agent.vision
+    "Crew",  # re-exported from crewai (test patch surface)
+    "PageImage",  # re-exported from pdf_renderer
+    "PageResult",  # re-exported from pdf2md_agent.crew.results
+    "_FALLBACK_SENTINEL",  # legacy alias: tests import this name from runner
+    "_output",  # re-exported from pdf2md_agent.crew.output
+    "_record_text_layer_fallback",  # re-exported from pdf2md_agent.crew.fallback
+    "_resize_page_png",  # re-exported from pdf2md_agent.crew.page_image
+    "_strip_think",  # re-exported from pdf2md_agent.crew.output
+    "_text_layer_fallback",  # re-exported from pdf2md_agent.crew.fallback
+    "_truncate_summary",  # re-exported from pdf2md_agent.crew.tasks
+    "make_extractor",  # re-exported from pdf2md_agent.crew.agents
+    "make_extract_task",  # re-exported from pdf2md_agent.crew.tasks
+    "make_format_task",  # re-exported from pdf2md_agent.crew.tasks
+    "make_format_task_from_extract_file",  # re-exported from pdf2md_agent.crew.tasks
+    "make_formatter",  # re-exported from pdf2md_agent.crew.agents
+    "make_summarize_task",  # re-exported from pdf2md_agent.crew.tasks
+    "make_summarizer",  # re-exported from pdf2md_agent.crew.agents
+    "make_vision_llm",  # re-exported from vision
     "render_pdf",  # re-exported from pdf2md_agent.pdf_renderer
     "run_pipeline",
+    "write_summary",  # re-exported from pdf2md_agent.cache
 ]
-
-
-def _prepare_page_image_and_budget(
-    page, layout, text_hint_str, summary, max_summary_chars, ctx_limit,
-    image_long_side, image_min_long_side, image_jpeg_quality, token_budget_safety,
-    idx, total, extractor_persona_text, phases
-):
-    persona_tokens = estimate_text_tokens(extractor_persona_text)
-    description_for_budget = build_extract_description(
-        page.image_path, text_hint_str, summary,
-        max_summary_chars=max_summary_chars,
-    )
-    fixed_text_tokens = estimate_text_tokens(description_for_budget)
-    decision = plan_for_image(
-        ctx_limit=ctx_limit,
-        persona_tokens=persona_tokens,
-        fixed_text_tokens=fixed_text_tokens,
-        image_path=page.image_path,
-        target_long_side=image_long_side,
-        min_long_side=image_min_long_side,
-        jpeg_quality=image_jpeg_quality,
-        safety=token_budget_safety,
-    )
-    current_img_tokens = estimate_image_tokens(page.image_path)
-    log.info(
-        "  [%d/%d] page %d: tokens est. total=%d (text=%d, img=%d), "
-        "target_long_side=%d, reason=%s",
-        idx,
-        total,
-        page.page_number,
-        decision.total,
-        persona_tokens + fixed_text_tokens,
-        current_img_tokens,
-        decision.needed_long_side,
-        decision.reason,
-    )
-
-    attach_image_path: Path = page.image_path
-    resized_path = _resized_cache_path(layout, page.page_number)
-    needs_resize = (
-        not decision.fits
-        or decision.needed_long_side < image_long_side
-    )
-    is_tiled = False
-    tile_paths: list[Path] = []
-
-    pages_dir = layout.pages_dir
-    if not decision.fits:
-        # Extreme downscaling detected, trigger tiling fallback
-        is_tiled = True
-        log.warning("  [%d/%d] page %d: Extreme downscaling needed, splitting into tiles.", idx, total, page.page_number)
-        pages_dir.mkdir(parents=True, exist_ok=True)
-        tile1_path = pages_dir / f"page_{page.page_number:04d}_tile1.jpg"
-        tile2_path = pages_dir / f"page_{page.page_number:04d}_tile2.jpg"
-
-        if not tile1_path.is_file() or not tile2_path.is_file():
-            from PIL import Image
-            with Image.open(page.image_path) as img:
-                width, height = img.size
-                overlap = int(height * 0.1) # 10% overlap
-                mid = height // 2
-
-                top_box = (0, 0, width, mid + overlap)
-                bottom_box = (0, mid - overlap, width, height)
-
-                img.crop(top_box).convert("RGB").save(tile1_path, "JPEG", quality=image_jpeg_quality)
-                img.crop(bottom_box).convert("RGB").save(tile2_path, "JPEG", quality=image_jpeg_quality)
-
-        tile_paths = [tile1_path, tile2_path]
-        attach_image_path = page.image_path # Still attached for metadata, but tasks ignore it
-
-    elif needs_resize:
-        if not resized_path.is_file():
-            pages_dir.mkdir(parents=True, exist_ok=True)
-            _resize_page_png(
-                page.image_path,
-                resized_path,
-                target_long_side=decision.needed_long_side,
-                jpeg_quality=image_jpeg_quality,
-            )
-        attach_image_path = resized_path
-
-    log.info("  [%d/%d] page %d: %s starting", idx, total, page.page_number, phases)
-    page_started = time.monotonic()
-    return attach_image_path, is_tiled, tile_paths, page_started
-
-
-def _run_extraction_with_reflection(
-    page, text_hint_str, summary, max_summary_chars, is_tiled, tile_paths,
-    attach_image_path, extractor, formatter, summarizer, retry_config, request_timeout_seconds,
-    fallback_to_text, artifacts, idx, total, page_started, results, fallback_pages, pages, assets_dir
-):
-    # Deterministic coverage reflection loop
-    reflection_attempts = 0
-    max_reflections = 2
-    coverage_threshold = 0.90
-
-    # Pre-process text_hint_str to drop common multipage headers and footers
-    coverage_text_hint = text_hint_str
-    if len(pages) > 1:
-        # Compare with next page if available, else previous page
-        compare_idx = idx + 1 if idx + 1 < len(pages) else idx - 1
-        compare_page = pages[compare_idx]
-        compare_hint = compare_page.text_hint or ""
-        coverage_text_hint = _strip_multipage_headers_footers(coverage_text_hint, compare_hint)
-
-    # We only consider non-whitespace/non-punctuation characters for coverage
-    def _clean_for_coverage(text: str) -> str:
-        return re.sub(r'\s+', '', text)
-
-    native_clean = _clean_for_coverage(coverage_text_hint)
-    needs_coverage_check = len(native_clean) > 20
-
-    penalty_prompt = ""
-
-    # Get list of native images available for this page
-    available_images = []
-    if assets_dir:
-        for img_file in assets_dir.glob(f"page_{page.page_number:04d}_img_*"):
-            if img_file.is_file():
-                available_images.append(img_file.name)
-
-    while True:
-        # Recreate tasks per iteration to avoid CrewAI state leaking
-        extract_t = make_extract_task(
-            extractor,
-            attach_image_path,
-            text_hint=text_hint_str + penalty_prompt,
-            previous_summary=summary,
-            max_summary_chars=max_summary_chars,
-            available_images=available_images,
-            is_tiled=is_tiled,
-            tile_paths=tile_paths,
-        )
-        format_t = make_format_task(formatter, extract_t)
-        tasks = [extract_t, format_t]
-        agents_list = [extractor, formatter]
-        if summarizer is not None:
-            summarize_t = make_summarize_task(
-                summarizer, format_t, summary, max_chars=max_summary_chars
-            )
-            tasks.append(summarize_t)
-            agents_list.append(summarizer)
-        else:
-            summarize_t = None
-
-        crew = Crew(
-            agents=agents_list,
-            tasks=tasks,
-            process=Process.sequential,
-            verbose=False,
-        )
-
-        try:
-            call_with_retry(
-                crew.kickoff,
-                config=retry_config or RetryConfig(),
-                label=f"page {page.page_number}" + (f" (reflection {reflection_attempts})" if reflection_attempts > 0 else ""),
-                timeout_seconds=request_timeout_seconds,
-            )
-        except ValidationError as exc:
-            if not fallback_to_text:
-                raise
-            log.warning(
-                "  [%d/%d] page %d: model returned malformed response "
-                "(%s, %d validation error(s)); falling back to text layer",
-                idx,
-                total,
-                page.page_number,
-                type(exc).__name__,
-                len(exc.errors()),
-            )
-            results.append(_record_text_layer_fallback(
-                idx=idx,
-                total=total,
-                page_number=page.page_number,
-                page_started=page_started,
-                artifacts=artifacts,
-                summary=summary,
-                completion_label="validation-fallback",
-            ))
-            fallback_pages.append(page.page_number)
-            break
-        except BaseException as exc:
-            if not fallback_to_text or not is_transient(exc):
-                raise
-            log.warning(
-                "  [%d/%d] page %d: vision pipeline failed after retries (%s); "
-                "falling back to text layer",
-                idx,
-                total,
-                page.page_number,
-                _safe_exc_summary(exc),
-            )
-            results.append(_record_text_layer_fallback(
-                idx=idx,
-                total=total,
-                page_number=page.page_number,
-                page_started=page_started,
-                artifacts=artifacts,
-                summary=summary,
-                completion_label="fallback",
-            ))
-            fallback_pages.append(page.page_number)
-            break
-
-        extract_text = _output(extract_t)
-        format_md = _output(format_t)
-
-        if needs_coverage_check and reflection_attempts < max_reflections:
-            md_clean = _clean_for_coverage(format_md)
-            # Use SequenceMatcher to find the longest contiguous matching subsequences
-            sm = difflib.SequenceMatcher(None, native_clean, md_clean)
-            # Calculate coverage as the ratio of matching characters relative to the native text length
-            # Calculate matches
-            match_blocks = sm.get_matching_blocks()
-            hit_count = sum(block.size for block in match_blocks)
-            coverage = hit_count / len(native_clean) if len(native_clean) > 0 else 1.0
-
-            if coverage < coverage_threshold:
-                reflection_attempts += 1
-                log.warning(
-                    "  [%d/%d] page %d: poor text coverage (%.2f < %.2f); triggering reflection %d",
-                    idx, total, page.page_number, coverage, coverage_threshold, reflection_attempts
-                )
-                penalty_prompt = (
-                    "\n\nCRITICAL WARNING: Your previous output missed significant portions of the native text. "
-                    "You MUST preserve ALL text. Please re-read the page carefully and transcribe completely."
-                )
-                continue
-
-        # Passed coverage or out of reflections
-        break
-
-
-    # Need to give default values just in case
-    if 'extract_text' not in locals():
-        extract_text = ""
-    if 'format_md' not in locals():
-        format_md = ""
-
-    summary_out = summary
-    if page.page_number not in fallback_pages:
-        if summarize_t is not None:
-            summary_out = _output(summarize_t)
-
-    return extract_text, format_md, summary_out, summarize_t

@@ -1,16 +1,32 @@
-"""CLI entry point for pdf2md-agent."""
+"""CLI entry point for pdf2md-agent.
+
+Top-level responsibilities:
+
+* :func:`main` — wire up logging, parse argv, dispatch to
+  :func:`cmd_convert`.
+* :func:`cmd_convert` — validate inputs, resolve the cache layout,
+  delegate the per-page pipeline to
+  :func:`pdf2md_agent.crew.runner.run_pipeline`, and stitch + write
+  the final Markdown.
+* :func:`_run_pipeline` — the runtime orchestrator that bridges the CLI
+  layer (logs, args, stitch mode) with the crew runner.
+* :func:`_render_pages` — trust-cache gate around
+  :func:`pdf2md_agent.pdf_renderer.render_pdf`.
+
+CLI errors are written to ``stderr`` via ``print(..., file=sys.stderr)``
+(intentional — logger output is reserved for run-progress diagnostics).
+"""
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
-import tempfile
 import time
-
-import pymupdf
 from pathlib import Path
 
-from pdf2md_agent import __about__
+import pymupdf
+from PIL import Image
+
 from pdf2md_agent.cache import (
     CacheLayout,
     CacheNoCacheFlags,
@@ -19,160 +35,150 @@ from pdf2md_agent.cache import (
     read_meta,
     write_meta,
 )
+from pdf2md_agent.cli_parser import (
+    _resolve_layout,
+    _resolve_no_cache_flags,
+    build_parser,
+    build_retry_config,
+)
 from pdf2md_agent.config import (
     FALLBACK_TO_TEXT,
     IMAGE_JPEG_QUALITY,
     IMAGE_LONG_SIDE,
     IMAGE_MIN_LONG_SIDE,
     MAX_SUMMARY_CHARS,
-    MODEL_NAME,
     REQUEST_TIMEOUT_SECONDS,
-    RETRY_INITIAL_DELAY,
-    RETRY_JITTER,
-    RETRY_MAX_ATTEMPTS,
-    RETRY_MAX_DELAY,
     TOKEN_BUDGET_SAFETY,
     resolve_ctx_limit,
 )
-from pdf2md_agent.crew.agents import PERSONA_VERSION
 from pdf2md_agent.crew.runner import run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
-from pdf2md_agent.pages import parse_page_spec, resolve_pages
-from PIL import Image
-
+from pdf2md_agent.pages import resolve_pages
 from pdf2md_agent.pdf_renderer import PageImage, render_pdf
 from pdf2md_agent.post_stream import StitchMode, stitch_pages
-from pdf2md_agent.render_skip import (
-    maybe_skip_render as _maybe_skip_render,
-)
+from pdf2md_agent.render_skip import maybe_skip_render as _maybe_skip_render
 from pdf2md_agent.vision import make_vision_llm
 
 log = logging.getLogger("pdf2md-agent")
 
-from pdf2md_agent.cli_parser import _cache_key_for_pdf, build_parser, _resolve_no_cache_flags, _NO_CACHE_FLAG_NAMES, _resolve_layout, _safe_intermediates_dir, _safe_cache_stem
 
-def _build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
-    """Build a RetryConfig from CLI args (override) + env (fallback). Returns None on invalid input."""
-    # ``--max-retries 0`` (or env PDF2MD_AGENT_MAX_RETRIES=0) → unlimited.
-    cli_max_attempts = args.max_retries
-    if cli_max_attempts == 0:
-        cli_max_attempts = None
+# --- Entrypoint -------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
+    args = build_parser().parse_args(argv)
+    return cmd_convert(args)
+
+
+# --- Input validation -------------------------------------------------------
+
+
+def _validate_pdf_header(pdf: Path) -> int | None:
+    """Return an exit code if the file is missing/unreadable/not a PDF; else None.
+
+    Fail-fast on bad input (D10-N04): we don't want to commit to creating
+    a tempdir or doing render work for a non-PDF.
+    """
+    if not pdf.exists():
+        print(f"error: input PDF not found: {pdf}", file=sys.stderr)
+        return 1
     try:
-        return RetryConfig(
-            max_attempts=(
-                cli_max_attempts
-                if cli_max_attempts is not None
-                else RETRY_MAX_ATTEMPTS
-            ),
-            initial_delay=(
-                args.retry_initial_delay
-                if args.retry_initial_delay is not None
-                else RETRY_INITIAL_DELAY
-            ),
-            max_delay=(
-                args.retry_max_delay
-                if args.retry_max_delay is not None
-                else RETRY_MAX_DELAY
-            ),
-            jitter=(
-                args.retry_jitter if args.retry_jitter is not None else RETRY_JITTER
-            ),
+        with pdf.open("rb") as fh:
+            header = fh.read(5)
+    except OSError as exc:
+        print(
+            f"error: cannot read input PDF {pdf}: {exc}",
+            file=sys.stderr,
         )
-    except ValueError as e:
-        print(f"error: invalid retry argument: {e}", file=sys.stderr)
-        return None
+        return 1
+    if not header.startswith(b"%PDF-"):
+        print(
+            f"error: input file is not a PDF (missing %PDF- header): {pdf}",
+            file=sys.stderr,
+        )
+        return 1
+    return None
+
+
+def _resolve_requested_pages(
+    pdf: Path, pages_spec: object
+) -> tuple[list[int] | None, int | None]:
+    """Validate ``pages_spec`` against the PDF's page count.
+
+    Returns ``(resolved_pages, exit_code)`` — ``exit_code`` is non-None if
+    validation failed. ``resolved_pages`` is ``None`` (all pages) when
+    ``pages_spec`` is ``None``.
+    """
+    if pages_spec is None:
+        return None, None
+    doc = pymupdf.open(pdf)
+    try:
+        resolved = resolve_pages(pages_spec, doc.page_count)
+    except ValueError as exc:
+        print(f"error: --pages {pages_spec!r}: {exc}", file=sys.stderr)
+        return None, 1
+    finally:
+        doc.close()
+    if not resolved:
+        print("ERROR: PDF has no pages to process.", file=sys.stderr)
+        return None, 1
+    return resolved, None
+
+
+# --- Orchestration ----------------------------------------------------------
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
-    retry_config = _build_retry_config(args)
+    retry_config = build_retry_config(args)
     if retry_config is None:
         return 1
+
+    header_exit = _validate_pdf_header(args.pdf)
+    if header_exit is not None:
+        return header_exit
+
     fallback_to_text = FALLBACK_TO_TEXT and not args.no_fallback_to_text
-
-    if not args.pdf.exists():
-        print(f"error: input PDF not found: {args.pdf}", file=sys.stderr)
-        return 1
-
-    # D10-N04: fail fast on non-PDF input before any tempdir/cache work.
-    try:
-        with args.pdf.open("rb") as _pdf_header_fh:
-            _pdf_header = _pdf_header_fh.read(5)
-    except OSError as _pdf_header_exc:
-        print(
-            f"error: cannot read input PDF {args.pdf}: {_pdf_header_exc}",
-            file=sys.stderr,
-        )
-        return 1
-    if not _pdf_header.startswith(b"%PDF-"):
-        print(
-            f"error: input file is not a PDF (missing %PDF- header): {args.pdf}",
-            file=sys.stderr,
-        )
-        return 1
-
-    started = time.monotonic()
     keep_intermediates = not args.no_intermediates
     with_summary = not args.no_summary
     no_cache_flags = _resolve_no_cache_flags(args)
 
-    # Resolve --pages against the PDF's actual page count so out-of-range
-    # errors surface before we commit to creating a tempdir or doing render work.
-    resolved_pages: list[int] | None
-    if args.pages is None:
-        resolved_pages = None
-    else:
-        doc = pymupdf.open(args.pdf)
-        try:
-            resolved_pages = resolve_pages(args.pages, doc.page_count)
-        except ValueError as e:
-            print(f"error: --pages {args.pages!r}: {e}", file=sys.stderr)
-            return 1
-        finally:
-            doc.close()
+    resolved_pages, pages_exit = _resolve_requested_pages(args.pdf, args.pages)
+    if pages_exit is not None:
+        return pages_exit
 
-    # Defensive empty-pages guard: ``resolve_pages`` raises on a 0-page
-    # PDF, so reaching here implies ``--pages`` filtered everything out.
-    if args.pages is not None and not resolved_pages:
-        print("ERROR: PDF has no pages to process.", file=sys.stderr)
-        raise SystemExit(1)
+    layout, render_target = _resolve_layout(
+        args.pdf, args.intermediates_dir, keep_intermediates
+    )
+    return _run_pipeline(
+        args=args,
+        layout=layout,
+        render_target=render_target,
+        resolved_pages=resolved_pages,
+        keep_intermediates=keep_intermediates,
+        with_summary=with_summary,
+        retry_config=retry_config,
+        fallback_to_text=fallback_to_text,
+        started=time.monotonic(),
+        no_cache=no_cache_flags,
+    )
 
-    if keep_intermediates:
-        layout, render_target = _resolve_layout(args.pdf, args.intermediates_dir, True)
-        return _run_pipeline(
-            args=args,
-            layout=layout,
-            render_target=render_target,
-            resolved_pages=resolved_pages,
-            keep_intermediates=True,
-            with_summary=with_summary,
-            retry_config=retry_config,
-            fallback_to_text=fallback_to_text,
-            started=started,
-            no_cache=no_cache_flags,
-        )
 
-    with tempfile.TemporaryDirectory(prefix="pdf2md_agent_") as td_str:
-        td = Path(td_str)
-        pages_dir = td / "pages"
-        pages_dir.mkdir()
-        layout = CacheLayout(
-            root=td,
-            pages_dir=pages_dir,
-            summary_path=td / "summary.json",
-            meta_path=td / "meta.json",
-        )
-        return _run_pipeline(
-            args=args,
-            layout=layout,
-            render_target=pages_dir,
-            resolved_pages=resolved_pages,
-            keep_intermediates=False,
-            with_summary=with_summary,
-            retry_config=retry_config,
-            fallback_to_text=fallback_to_text,
-            started=started,
-            no_cache=no_cache_flags,
-        )
+# --- Render-time helpers ----------------------------------------------------
+
+
+def _pdf_page_count(pdf: Path) -> int:
+    """Return the page count of ``pdf`` via PyMuPDF."""
+    doc = pymupdf.open(pdf)
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
 
 
 def _render_pages(
@@ -224,12 +230,7 @@ def _render_pages(
     return pages
 
 
-def _pdf_page_count(pdf: Path) -> int:
-    doc = pymupdf.open(pdf)
-    try:
-        return doc.page_count
-    finally:
-        doc.close()
+# --- Pipeline bridge --------------------------------------------------------
 
 
 def _run_pipeline(
@@ -368,16 +369,4 @@ def _run_pipeline(
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(message)s",
-        datefmt="%H:%M:%S",
-        stream=sys.stderr,
-    )
-    args = build_parser().parse_args(argv)
-    return cmd_convert(args)
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+__all__ = ["main"]

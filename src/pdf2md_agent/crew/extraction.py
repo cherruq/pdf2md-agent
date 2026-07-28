@@ -1,0 +1,371 @@
+"""Per-page extraction loop: build crew, kickoff, optionally reflect on coverage.
+
+The vision model occasionally under-transcribes a page (e.g. drops a
+column of a table). When the runner has access to the PDF's native text
+layer it can detect that drift cheaply via
+:func:`difflib.SequenceMatcher` and re-run the extractor with a penalty
+prompt — a deterministic, no-LLM "reflection" loop. This module owns:
+
+* :func:`run_extraction_loop` — the main extract → format → (optional)
+  reflect → (optional) summarize crew run for a single page. Returns a
+  :class:`ExtractionOutcome` describing the success path or a fallback.
+* :func:`_strip_multipage_headers_footers` — strip header/footer lines
+  that recur across neighbouring pages, used to lower the noise floor of
+  the coverage comparison.
+"""
+from __future__ import annotations
+
+import difflib
+import logging
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from crewai import LLM, Process
+from pydantic import ValidationError
+
+from pdf2md_agent.cache import CacheLayout, PageArtifacts
+from pdf2md_agent.crew import runner as _runner
+from pdf2md_agent.crew.fallback import _record_text_layer_fallback
+from pdf2md_agent.crew.output import _output
+from pdf2md_agent.crew.page_image import PreparedPage
+from pdf2md_agent.crew.results import PageResult
+from pdf2md_agent.llm_retry import (
+    RetryConfig,
+    _safe_exc_summary,
+    call_with_retry,
+    is_transient,
+)
+from pdf2md_agent.pdf_renderer import PageImage
+
+log = logging.getLogger("pdf2md_agent.runner")
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractionOutcome:
+    """Result of one page's extraction loop.
+
+    * ``succeeded`` — the crew returned a usable extract + format
+      payload. ``extract_text`` and ``format_md`` are non-empty; the
+      runner should write them to disk and append a :class:`PageResult`.
+    * ``fell_back`` — vision model failed; ``page_result`` is the
+      text-layer fallback to append to the results list instead.
+    """
+
+    succeeded: bool
+    fell_back: bool
+    page_result: PageResult | None
+    extract_text: str
+    format_md: str
+    summary_out: str
+    summarize_t: object | None
+
+
+def _strip_multipage_headers_footers(text: str, compare_text: str) -> str:
+    """Strip prefixes/suffixes that recur across pages to avoid coverage penalties."""
+    if not text or not compare_text:
+        return text
+
+    start_trim = 0
+    end_trim = len(text)
+
+    # Header: longest match starting at offset 0 (within first 200 chars).
+    sm_head = difflib.SequenceMatcher(None, text[:200], compare_text[:200])
+    head_match = sm_head.find_longest_match(
+        0, min(200, len(text)), 0, min(200, len(compare_text))
+    )
+    if head_match.size > 5 and head_match.a < 20:
+        start_trim = head_match.a + head_match.size
+
+    # Footer: longest match ending at the last 200 chars.
+    sm_tail = difflib.SequenceMatcher(None, text[-200:], compare_text[-200:])
+    tail_match = sm_tail.find_longest_match(
+        0, min(200, len(text)), 0, min(200, len(compare_text))
+    )
+    if tail_match.size > 5 and (len(text[-200:]) - (tail_match.a + tail_match.size)) < 20:
+        end_trim = max(start_trim, len(text) - 200 + tail_match.a)
+
+    if start_trim < end_trim:
+        trimmed = text[start_trim:end_trim].strip()
+        lines = trimmed.splitlines()
+        # Strip lone page-number / dash-only lines at either end.
+        while lines and re.match(r"^\s*[\d\-]+\s*$", lines[0]):
+            lines.pop(0)
+        while lines and re.match(r"^\s*[\d\-]+\s*$", lines[-1]):
+            lines.pop(-1)
+        return "\n".join(lines)
+    return text
+
+
+def _clean_for_coverage(text: str) -> str:
+    """Drop all whitespace for a cheap character-coverage comparison."""
+    return re.sub(r"\s+", "", text)
+
+
+_REFLECTION_COVERAGE_THRESHOLD = 0.90
+_REFLECTION_MAX_ATTEMPTS = 2
+_PENALTY_PROMPT = (
+    "\n\nCRITICAL WARNING: Your previous output missed significant portions "
+    "of the native text. You MUST preserve ALL text. Please re-read the "
+    "page carefully and transcribe completely."
+)
+
+
+def _build_crew(
+    *,
+    extractor,
+    formatter,
+    summarizer,
+    prepared: PreparedPage,
+    text_hint_str: str,
+    summary: str,
+    max_summary_chars: int,
+    penalty_prompt: str,
+    available_images: list[str],
+):
+    """Construct the (extract → format → summarize) crew for one attempt.
+
+    CrewAI tasks hold per-attempt state, so the crew must be reconstructed
+    on every reflection iteration to avoid leaking the previous attempt's
+    context.
+    """
+    extract_t = _runner.make_extract_task(
+        extractor,
+        prepared.attach_image_path,
+        text_hint=text_hint_str + penalty_prompt,
+        previous_summary=summary,
+        max_summary_chars=max_summary_chars,
+        available_images=available_images,
+        is_tiled=prepared.is_tiled,
+        tile_paths=prepared.tile_paths,
+    )
+    format_t = _runner.make_format_task(formatter, extract_t)
+    tasks = [extract_t, format_t]
+    agents_list = [extractor, formatter]
+
+    summarize_t = None
+    if summarizer is not None:
+        summarize_t = _runner.make_summarize_task(
+            summarizer, format_t, summary, max_chars=max_summary_chars
+        )
+        tasks.append(summarize_t)
+        agents_list.append(summarizer)
+
+    crew = _runner.Crew(
+        agents=agents_list,
+        tasks=tasks,
+        process=Process.sequential,
+        verbose=False,
+    )
+    return crew, extract_t, format_t, summarize_t
+
+
+def _maybe_reflect(
+    *,
+    page: PageImage,
+    idx: int,
+    total: int,
+    format_md: str,
+    coverage_text_hint: str,
+    reflection_attempts: int,
+) -> tuple[bool, str]:
+    """Decide whether the current attempt missed text and needs another pass.
+
+    Returns ``(should_continue, penalty_prompt_for_next_attempt)``. The
+    caller loops while ``should_continue`` is True, up to
+    ``_REFLECTION_MAX_ATTEMPTS`` total reflections.
+    """
+    if reflection_attempts >= _REFLECTION_MAX_ATTEMPTS:
+        return False, ""
+
+    native_clean = _clean_for_coverage(coverage_text_hint)
+    if len(native_clean) <= 20:
+        return False, ""
+
+    md_clean = _clean_for_coverage(format_md)
+    sm = difflib.SequenceMatcher(None, native_clean, md_clean)
+    hit_count = sum(block.size for block in sm.get_matching_blocks())
+    coverage = hit_count / len(native_clean) if native_clean else 1.0
+
+    if coverage >= _REFLECTION_COVERAGE_THRESHOLD:
+        return False, ""
+
+    log.warning(
+        "  [%d/%d] page %d: poor text coverage (%.2f < %.2f); "
+        "triggering reflection %d",
+        idx, total, page.page_number,
+        coverage, _REFLECTION_COVERAGE_THRESHOLD, reflection_attempts + 1,
+    )
+    return True, _PENALTY_PROMPT
+
+
+def run_extraction_loop(
+    *,
+    page: PageImage,
+    artifacts: PageArtifacts,
+    layout: CacheLayout,
+    all_pages: list[PageImage],
+    idx: int,
+    total: int,
+    prepared: PreparedPage,
+    text_hint_str: str,
+    summary: str,
+    with_summary: bool,
+    llm: LLM,
+    retry_config: RetryConfig | None,
+    fallback_to_text: bool,
+    max_summary_chars: int,
+    request_timeout_seconds: float | None,
+    assets_dir: Path | None,
+) -> ExtractionOutcome:
+    """Run extract → format → (reflect) → (summarize) for one page.
+
+    On a transient retry exhaustion (or :class:`ValidationError` from a
+    malformed task output) the function writes a fenced text-layer
+    fallback and returns it via :attr:`ExtractionOutcome.page_result` so
+    the runner can append it to the results list instead of the normal
+    output.
+
+    On success it returns ``succeeded=True`` with the freshly extracted
+    text + formatted markdown + (optional) new summary; the caller is
+    responsible for writing them to disk and threading the new summary
+    into the next page.
+    """
+    extractor = _runner.make_extractor(llm)
+    formatter = _runner.make_formatter(llm)
+    summarizer = _runner.make_summarizer(llm) if with_summary else None
+
+    # Strip recurring multi-page headers/footers from the text-hint before
+    # comparing against the model's output — pages with the same running
+    # header would otherwise fail the coverage check.
+    coverage_text_hint = text_hint_str
+    if len(all_pages) > 1:
+        compare_idx = idx + 1 if idx + 1 < len(all_pages) else idx - 1
+        compare_text_path = layout.page_text_path(
+            all_pages[compare_idx].page_number
+        )
+        compare_hint = (
+            compare_text_path.read_text(encoding="utf-8")
+            if compare_text_path.exists()
+            else ""
+        )
+        coverage_text_hint = _strip_multipage_headers_footers(
+            coverage_text_hint, compare_hint
+        )
+
+    available_images: list[str] = []
+    if assets_dir:
+        for img_file in assets_dir.glob(f"page_{page.page_number:04d}_img_*"):
+            if img_file.is_file():
+                available_images.append(img_file.name)
+
+    extract_text = ""
+    format_md = ""
+    summary_out = summary
+    summarize_t: object | None = None
+    reflection_attempts = 0
+    penalty_prompt = ""
+
+    while True:
+        crew, extract_t, format_t, summarize_t = _build_crew(
+            extractor=extractor,
+            formatter=formatter,
+            summarizer=summarizer,
+            prepared=prepared,
+            text_hint_str=text_hint_str,
+            summary=summary,
+            max_summary_chars=max_summary_chars,
+            penalty_prompt=penalty_prompt,
+            available_images=available_images,
+        )
+
+        try:
+            call_with_retry(
+                crew.kickoff,
+                config=retry_config or RetryConfig(),
+                label=(
+                    f"page {page.page_number}"
+                    + (
+                        f" (reflection {reflection_attempts})"
+                        if reflection_attempts > 0
+                        else ""
+                    )
+                ),
+                timeout_seconds=request_timeout_seconds,
+            )
+        except ValidationError as exc:
+            if not fallback_to_text:
+                raise
+            log.warning(
+                "  [%d/%d] page %d: model returned malformed response "
+                "(%s, %d validation error(s)); falling back to text layer",
+                idx, total, page.page_number,
+                type(exc).__name__, len(exc.errors()),
+            )
+            result = _record_text_layer_fallback(
+                idx=idx, total=total,
+                page_number=page.page_number,
+                page_started=prepared.page_started,
+                artifacts=artifacts,
+                summary=summary,
+                completion_label="validation-fallback",
+            )
+            return ExtractionOutcome(
+                succeeded=False, fell_back=True,
+                page_result=result,
+                extract_text="", format_md="",
+                summary_out=summary, summarize_t=None,
+            )
+        except BaseException as exc:  # noqa: BLE001 — see runner/AGENTS.md
+            if not fallback_to_text or not is_transient(exc):
+                raise
+            log.warning(
+                "  [%d/%d] page %d: vision pipeline failed after retries (%s); "
+                "falling back to text layer",
+                idx, total, page.page_number, _safe_exc_summary(exc),
+            )
+            result = _record_text_layer_fallback(
+                idx=idx, total=total,
+                page_number=page.page_number,
+                page_started=prepared.page_started,
+                artifacts=artifacts,
+                summary=summary,
+                completion_label="fallback",
+            )
+            return ExtractionOutcome(
+                succeeded=False, fell_back=True,
+                page_result=result,
+                extract_text="", format_md="",
+                summary_out=summary, summarize_t=None,
+            )
+
+        extract_text = _output(extract_t)
+        format_md = _output(format_t)
+
+        should_continue, penalty_prompt = _maybe_reflect(
+            page=page, idx=idx, total=total,
+            format_md=format_md,
+            coverage_text_hint=coverage_text_hint,
+            reflection_attempts=reflection_attempts,
+        )
+        if not should_continue:
+            break
+        reflection_attempts += 1
+
+    if summarize_t is not None:
+        summary_out = _output(summarize_t)
+        if len(summary_out) > max_summary_chars:
+            summary_out = _runner._truncate_summary(summary_out, max_summary_chars)
+
+    return ExtractionOutcome(
+        succeeded=True, fell_back=False,
+        page_result=None,
+        extract_text=extract_text, format_md=format_md,
+        summary_out=summary_out, summarize_t=summarize_t,
+    )
+
+
+__all__ = [
+    "ExtractionOutcome",
+    "run_extraction_loop",
+]
