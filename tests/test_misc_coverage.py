@@ -19,7 +19,9 @@ from pdf2md_agent.cache import (
     read_summary,
     write_summary,
 )
-from pdf2md_agent.cli import _atomic_write_text, _safe_cache_stem, _safe_intermediates_dir
+from pdf2md_agent.cli_parser import _safe_intermediates_dir
+from pdf2md_agent.cli_parser import _safe_cache_stem
+from pdf2md_agent.cache import atomic_write_text as _atomic_write_text
 from pdf2md_agent.config import MODEL_NAME
 from pdf2md_agent.crew import agents
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
