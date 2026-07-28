@@ -1,15 +1,54 @@
+"""argparse builder + CLI argument post-processing.
+
+Two responsibilities live here:
+
+* :func:`build_parser` — the :class:`argparse.ArgumentParser` definition
+  for the ``pdf2md-agent`` CLI. Argument groups (Pipeline / Cache
+  control / Feature disable / Retry & tuning / Diagnostic) are surfaced
+  in ``--help`` so users can discover flags without reading the README.
+* Post-parse resolution helpers (:func:`_resolve_no_cache_flags`,
+  :func:`_resolve_layout`, :func:`build_retry_config`) — pure functions
+  that turn a parsed :class:`argparse.Namespace` into the typed value
+  objects the runtime expects (:class:`CacheNoCacheFlags`,
+  :class:`CacheLayout`, :class:`RetryConfig`).
+
+Validation helpers (``_request_timeout_type``, ``_positive_int_type``,
+``_safe_intermediates_dir``) live at module scope; the cache-key /
+safe-stem helpers moved to :mod:`pdf2md_agent.filesystem_safety`.
+"""
 from __future__ import annotations
+
 import argparse
 import tempfile
-import sys
 from pathlib import Path
 from typing import Callable
+
 from pdf2md_agent import __about__
-from pdf2md_agent.cache import CacheNoCacheFlags, CacheLayout
+from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import MODEL_NAME
 from pdf2md_agent.crew.agents import PERSONA_VERSION
+from pdf2md_agent.filesystem_safety import cache_key_for_pdf, safe_cache_stem
+from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec
 from pdf2md_agent.post_stream import StitchMode
+
+
+# Legacy aliases: tests import these names from cli_parser.
+_cache_key_for_pdf = cache_key_for_pdf
+_safe_cache_stem = safe_cache_stem
+
+
+_NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
+    "render",
+    "text",
+    "resized",
+    "extract",
+    "format",
+    "summary",
+)
+
+
+# --- argparse actions & validators -----------------------------------------
 
 
 class _VersionAction(argparse.Action):
@@ -22,6 +61,25 @@ class _VersionAction(argparse.Action):
     ) -> None:
         print(f"pdf2md-agent {__about__.__version__}")
         parser.exit(0)
+
+
+class _NoCacheAllAction(argparse.Action):
+    """Sets every ``--no-cache-*`` flag to True when ``--no-cache-all`` is set.
+
+    Implemented as a custom ``Action`` so post-parse resolution happens
+    automatically regardless of argument order on the command line.
+    """
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None,
+    ) -> None:
+        for name in _NO_CACHE_FLAG_NAMES:
+            setattr(namespace, f"no_cache_{name}", True)
+        setattr(namespace, "no_cache_all", True)
 
 
 def _request_timeout_type(raw: str) -> float:
@@ -56,35 +114,6 @@ def _positive_int_type(name: str, minimum: int) -> Callable[[str], int]:
     return _parser
 
 
-_NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
-    "render",
-    "text",
-    "resized",
-    "extract",
-    "format",
-    "summary",
-)
-
-
-class _NoCacheAllAction(argparse.Action):
-    """Sets every ``--no-cache-*`` flag to True when ``--no-cache-all`` is set.
-
-    Implemented as a custom ``Action`` so post-parse resolution happens
-    automatically regardless of argument order on the command line.
-    """
-
-    def __call__(
-        self,
-        parser: argparse.ArgumentParser,
-        namespace: argparse.Namespace,
-        values: object,
-        option_string: str | None,
-    ) -> None:
-        for name in _NO_CACHE_FLAG_NAMES:
-            setattr(namespace, f"no_cache_{name}", True)
-        setattr(namespace, "no_cache_all", True)
-
-
 def _safe_intermediates_dir(value: str) -> Path:
     """argparse ``type=`` for ``--intermediates-dir``.
 
@@ -100,66 +129,103 @@ def _safe_intermediates_dir(value: str) -> Path:
     return p
 
 
-# Windows reserved device names. ``CreateFile`` rejects these as bare
-# filenames (with or without an extension), and ``mkdir`` on a reserved
-# name surfaces as an opaque OSError. ``CON``, ``PRN``, ``AUX``, ``NUL``
-# plus ``COM1``-``COM9`` and ``LPT1``-``LPT9``. Case-insensitive on Windows.
-_WINDOWS_RESERVED_NAMES: frozenset[str] = frozenset(
-    {"CON", "PRN", "AUX", "NUL"}
-    | {f"COM{i}" for i in range(1, 10)}
-    | {f"LPT{i}" for i in range(1, 10)}
-)
+# --- Post-parse resolvers --------------------------------------------------
 
 
-def _safe_cache_stem(stem: str) -> str:
-    """Return a filesystem-safe cache directory name derived from ``stem``.
+def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
+    """Build a :class:`CacheNoCacheFlags` from CLI flags.
 
-    On Windows, the bare filenames ``CON``, ``PRN``, ``AUX``, ``NUL``,
-    ``COM1``-``COM9``, and ``LPT1``-``LPT9`` are reserved device names and
-    cannot be used as a directory name — ``mkdir`` on ``.pdf2md-agent-cache/CON``
-    fails with an opaque OSError. Trailing dots / spaces and leading
-    whitespace are likewise rejected. We append a single ``_`` so the
-    cache lives at ``<reserved>_`` instead of crashing the run.
-
-    On non-Windows platforms the reservation does not apply; we still
-    strip trailing dots/spaces defensively for portability.
-
-    Case-collision (D16-002): on case-insensitive filesystems (NTFS,
-    APFS, HFS+) two PDFs whose stems differ only in case map to the
-    same cache directory. We do not canonicalize here — instead, callers
-    are warned via this function's docstring to pick distinct stems.
+    The ``--no-cache-all`` action already flips every per-resource flag,
+    so this is a straight attribute-to-field copy.
     """
-    if not stem:
-        return "_"
-    candidate = stem.rstrip(" .")
-    if not candidate:
-        return "_"
-    if sys.platform == "win32" and candidate.upper() in _WINDOWS_RESERVED_NAMES:
-        return candidate + "_"
-    return candidate
+    return CacheNoCacheFlags(
+        render=bool(args.no_cache_render),
+        text=bool(args.no_cache_text),
+        resized=bool(args.no_cache_resized),
+        extract=bool(args.no_cache_extract),
+        format=bool(args.no_cache_format),
+        summary=bool(args.no_cache_summary),
+    )
 
 
-def _cache_key_for_pdf(pdf: Path) -> str:
-    """Return a deterministic cache directory name for ``pdf``.
+def _resolve_layout(
+    pdf: Path,
+    override: Path | None,
+    keep_intermediates: bool,
+) -> tuple[CacheLayout, Path]:
+    """Return ``(layout, render_target_pages_dir)``.
 
-    Uses the PDF's stem when it is short, free of path separators, and not
-    a Windows-reserved name. For long stems, names that contain ``/`` (e.g.
-    when the PDF lives under a deeply-nested tree), or Windows-reserved
-    stems on a Windows host, the cache key is a 16-character SHA-256
-    digest of the absolute PDF path — deterministic per file, never
-    collides between different absolute paths.
+    When ``keep_intermediates`` is False the layout lives under a tempdir
+    that is removed on context exit.
     """
-    abs_path = pdf.resolve()
-    stem = _safe_cache_stem(abs_path.stem)
-    if (
-        0 < len(stem) <= 60
-        and "/" not in abs_path.stem
-        and "\\" not in abs_path.stem
-        and (sys.platform != "win32" or stem.upper() not in _WINDOWS_RESERVED_NAMES)
-    ):
-        return stem
-    import hashlib
-    return hashlib.sha256(str(abs_path).encode("utf-8")).hexdigest()[:16]
+    if keep_intermediates:
+        root = (
+            override
+            if override is not None
+            else Path(".pdf2md-agent-cache") / cache_key_for_pdf(pdf)
+        )
+        return CacheLayout.for_pdf(root, pdf), root / "pages"
+
+    td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
+    pages = td / "pages"
+    pages.mkdir()
+    return (
+        CacheLayout(
+            root=td,
+            pages_dir=pages,
+            summary_path=td / "summary.json",
+            meta_path=td / "meta.json",
+        ),
+        pages,
+    )
+
+
+def build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
+    """Build a :class:`RetryConfig` from CLI args (override) + env (fallback).
+
+    Returns ``None`` on invalid input so the caller can print a
+    user-facing error and exit non-zero. ``--max-retries 0`` (or env
+    ``PDF2MD_AGENT_MAX_RETRIES=0``) means "unlimited" and is normalized
+    to ``RetryConfig.max_attempts=None``.
+    """
+    # Defer the env-fallback imports to keep this module's top light.
+    from pdf2md_agent.config import (
+        RETRY_INITIAL_DELAY,
+        RETRY_JITTER,
+        RETRY_MAX_ATTEMPTS,
+        RETRY_MAX_DELAY,
+    )
+
+    cli_max_attempts = args.max_retries
+    if cli_max_attempts == 0:
+        cli_max_attempts = None
+    try:
+        return RetryConfig(
+            max_attempts=(
+                cli_max_attempts
+                if cli_max_attempts is not None
+                else RETRY_MAX_ATTEMPTS
+            ),
+            initial_delay=(
+                args.retry_initial_delay
+                if args.retry_initial_delay is not None
+                else RETRY_INITIAL_DELAY
+            ),
+            max_delay=(
+                args.retry_max_delay
+                if args.retry_max_delay is not None
+                else RETRY_MAX_DELAY
+            ),
+            jitter=(
+                args.retry_jitter if args.retry_jitter is not None else RETRY_JITTER
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: invalid retry argument: {exc}", file=__import__("sys").stderr)
+        return None
+
+
+# --- Parser definition -----------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -418,45 +484,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
-    """Build a :class:`CacheNoCacheFlags` from CLI flags.
-
-    The ``--no-cache-all`` action already flips every per-resource flag,
-    so this is a straight attribute-to-field copy.
-    """
-    return CacheNoCacheFlags(
-        render=bool(args.no_cache_render),
-        text=bool(args.no_cache_text),
-        resized=bool(args.no_cache_resized),
-        extract=bool(args.no_cache_extract),
-        format=bool(args.no_cache_format),
-        summary=bool(args.no_cache_summary),
-    )
+# Legacy aliases under the underscore-prefixed names tests still import.
+_safe_cache_stem = safe_cache_stem
+_cache_key_for_pdf = cache_key_for_pdf
 
 
-def _resolve_layout(
-    pdf: Path,
-    override: Path | None,
-    keep_intermediates: bool,
-) -> tuple[CacheLayout, Path]:
-    """Return ``(layout, render_target_pages_dir)``.
-
-    When ``keep_intermediates`` is False the layout lives under a tempdir that
-    is removed on context exit.
-    """
-    if keep_intermediates:
-        root = override if override is not None else Path(".pdf2md-agent-cache") / _cache_key_for_pdf(pdf)
-        return CacheLayout.for_pdf(root, pdf), root / "pages"
-
-    td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
-    pages = td / "pages"
-    pages.mkdir()
-    return (
-        CacheLayout(
-            root=td,
-            pages_dir=pages,
-            summary_path=td / "summary.json",
-            meta_path=td / "meta.json",
-        ),
-        pages,
-    )
+__all__ = [
+    "_NO_CACHE_FLAG_NAMES",
+    "_cache_key_for_pdf",
+    "_resolve_layout",
+    "_resolve_no_cache_flags",
+    "_safe_cache_stem",
+    "_safe_intermediates_dir",
+    "build_parser",
+    "build_retry_config",
+]

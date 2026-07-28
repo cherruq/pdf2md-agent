@@ -1,4 +1,24 @@
-"""Project configuration loaded from the environment at import time."""
+"""Project configuration loaded from the environment at import time.
+
+``config.py`` is split into four concern-grouped sections:
+
+1. **Env helpers** (:func:`_env`, :func:`_env_int`, :func:`_env_float`,
+   :func:`_env_bool`, :func:`_env_int_or_unlimited`,
+   :func:`_env_positive_float`) — strict, typed accessors with clear
+   error messages.
+2. **Endpoint + auth** (``OPENAI_BASE_URL``, ``MODEL_NAME``,
+   :func:`require_api_key`) — the OpenAI-compatible base URL, the
+   configured model, and the API-key guard.
+3. **Token budget + image downscale** (``TOKEN_BUDGET_SAFETY``,
+   ``IMAGE_LONG_SIDE``, ``IMAGE_JPEG_QUALITY``, ``IMAGE_MIN_LONG_SIDE``,
+   ``MAX_SUMMARY_CHARS``, :func:`resolve_ctx_limit`) — knobs the
+   per-call planner reads.
+4. **LLM retry + fallback** (``RETRY_*``, ``FALLBACK_TO_TEXT``) —
+   knobs the retry/backoff layer reads.
+
+``load_dotenv()`` runs at import time; any module that imports
+``config`` transitively will read ``.env`` exactly once.
+"""
 from __future__ import annotations
 
 import functools
@@ -13,8 +33,10 @@ from pdf2md_agent.ctx_probe import probe_ctx_limit
 
 log = logging.getLogger("pdf2md_agent.config")
 
-
 load_dotenv()
+
+
+# --- Env helpers ------------------------------------------------------------
 
 
 def _env(name: str, default: str = "") -> str:
@@ -74,10 +96,6 @@ def _env_int_or_unlimited(name: str) -> int | None:
     return value
 
 
-OPENAI_BASE_URL: Final[str] = _env("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
-MODEL_NAME: Final[str] = _env("PDF2MD_AGENT_MODEL", "MiniMax-M3")
-
-
 def _env_positive_float(name: str, default: float) -> float:
     raw = _env(name)
     if not raw:
@@ -91,12 +109,25 @@ def _env_positive_float(name: str, default: float) -> float:
     return value
 
 
-REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
-    "PDF2MD_AGENT_REQUEST_TIMEOUT", 60.0
-)
+# --- Endpoint + auth --------------------------------------------------------
 
 
-# --- Token-budget / image-downscale knobs -----------------------------------
+OPENAI_BASE_URL: Final[str] = _env("OPENAI_BASE_URL", "https://api.minimaxi.com/v1")
+MODEL_NAME: Final[str] = _env("PDF2MD_AGENT_MODEL", "MiniMax-M3")
+
+
+def require_api_key() -> str:
+    """Return the OpenAI API key from the environment, or raise with guidance."""
+    value = _env("OPENAI_API_KEY")
+    if not value:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in."
+        )
+    return value
+
+
+# --- Token budget + image downscale -----------------------------------------
+
 # ``resolve_ctx_limit`` consults env → ``/v1/models`` probe → hardcoded
 # default; the 0.85 safety margin keeps us off the cliff edge while a
 # paginate is in flight.
@@ -176,8 +207,12 @@ IMAGE_JPEG_QUALITY: Final[int] = _env_int("PDF2MD_AGENT_IMAGE_JPEG_QUALITY", 85)
 IMAGE_MIN_LONG_SIDE: Final[int] = _env_int("PDF2MD_AGENT_IMAGE_MIN_LONG_SIDE", 768)
 MAX_SUMMARY_CHARS: Final[int] = _env_int("PDF2MD_AGENT_MAX_SUMMARY_CHARS", 800)
 
+REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
+    "PDF2MD_AGENT_REQUEST_TIMEOUT", 60.0
+)
 
-# --- LLM retry / fallback knobs ---------------------------------------------
+
+# --- LLM retry + fallback ---------------------------------------------------
 # Defaults: unlimited transient retries with Fibonacci backoff (per-attempt
 # delay capped at 15 min). Set PDF2MD_AGENT_MAX_RETRIES (or pass
 # --max-retries) to a positive integer to bound the budget.
@@ -191,11 +226,21 @@ RETRY_JITTER: Final[float] = _env_float("PDF2MD_AGENT_RETRY_JITTER", 0.25)
 FALLBACK_TO_TEXT: Final[bool] = _env_bool("PDF2MD_AGENT_FALLBACK_TO_TEXT", True)
 
 
-def require_api_key() -> str:
-    """Return the OpenAI API key from the environment, or raise with guidance."""
-    value = _env("OPENAI_API_KEY")
-    if not value:
-        raise RuntimeError(
-            "OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in."
-        )
-    return value
+__all__ = [
+    "FALLBACK_TO_TEXT",
+    "IMAGE_JPEG_QUALITY",
+    "IMAGE_LONG_SIDE",
+    "IMAGE_MIN_LONG_SIDE",
+    "MAX_SUMMARY_CHARS",
+    "MODEL_NAME",
+    "OPENAI_BASE_URL",
+    "REQUEST_TIMEOUT_SECONDS",
+    "RETRY_INITIAL_DELAY",
+    "RETRY_JITTER",
+    "RETRY_MAX_ATTEMPTS",
+    "RETRY_MAX_DELAY",
+    "TOKEN_BUDGET_SAFETY",
+    "probe_ctx_limit",
+    "require_api_key",
+    "resolve_ctx_limit",
+]

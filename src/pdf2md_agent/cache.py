@@ -1,4 +1,23 @@
-"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs, running summary."""
+"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs, running summary.
+
+The cache layer is split into three cohesive concerns:
+
+* **Filesystem primitives** (:func:`atomic_write_text`) — sibling-tempfile
+  + ``os.replace`` so a crash mid-write leaves the original file intact.
+  Both ``meta.json`` writes and the CLI's final output write go through
+  this seam.
+* **Layout** (:class:`CacheLayout`, :class:`PageArtifacts`,
+  :func:`is_page_complete`, :func:`has_cached_extract`) — the on-disk
+  paths and their trust-cache gates. ``has_cached_extract`` rejects both
+  empty extracts (H1 sentinel) and the ``FALLBACK_SENTINEL`` marker
+  written by the text-layer fallback.
+* **JSON state** (:func:`read_meta`, :func:`write_meta`,
+  :func:`check_meta_matches`, :func:`read_summary`, :func:`write_summary`)
+  — the two persisted state files (``meta.json`` fingerprint + the
+  running summary). Each reader is forgiving on missing input (returns a
+  safe default) but loud on malformed input (raises or returns mismatch
+  reasons).
+"""
 from __future__ import annotations
 
 import json
@@ -16,6 +35,30 @@ from pdf2md_agent.pdf_renderer import PageImage
 log = logging.getLogger("pdf2md_agent.cache")
 
 _ATOMIC_TMP_MODE: Final[int] = 0o600
+
+FALLBACK_SENTINEL: Final[str] = (
+    "(vision model unavailable for page {page}; text-layer fallback emitted; "
+    "treat as sentinel — no extractor payload available)\n"
+)
+"""Marker written into ``extract.txt`` by the text-layer fallback.
+
+Two readers depend on the exact prefix string:
+
+* :func:`has_cached_extract` — refuses to trust an extract whose first
+  characters match ``"(vision model unavailable for page"`` so a
+  ``--no-cache-extract`` pass does not feed the marker text into the
+  formatter.
+* The fallback itself (:func:`pdf2md_agent.crew.fallback._record_text_layer_fallback`)
+  which writes ``FALLBACK_SENTINEL.format(page=N)`` to the extract
+  artifact so a follow-up run sees the sentinel and refuses to trust
+  the file.
+
+The prefix substring ``"(vision model unavailable for page"`` is also
+hard-coded in :func:`has_cached_extract` — they must stay in sync.
+"""
+
+
+# --- Filesystem primitives ---------------------------------------------------
 
 
 class CacheCorruptedError(RuntimeError):
@@ -76,6 +119,9 @@ def atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
+# --- Layout ------------------------------------------------------------------
+
+
 @dataclass(frozen=True, slots=True)
 class PageArtifacts:
     """Files written for one page: source PNG, native text, agent outputs."""
@@ -128,6 +174,9 @@ class CacheLayout:
             extract_text=self.page_extract_path(page.page_number),
             format_markdown=self.page_format_path(page.page_number),
         )
+
+
+# --- JSON state: meta fingerprint ------------------------------------------
 
 
 def _backup_corrupt_file(path: Path) -> Path | None:
@@ -323,6 +372,9 @@ def check_meta_matches(
     return reasons
 
 
+# --- JSON state: running summary -------------------------------------------
+
+
 def read_summary(path: Path) -> str:
     """Read the running-summary payload from ``path``.
 
@@ -375,6 +427,9 @@ def write_summary(path: Path, summary: str) -> None:
     except OSError as exc:
         log.error("write_summary: failed to write %s: %s", path, exc)
         raise
+
+
+# --- Trust-cache gates ------------------------------------------------------
 
 
 def is_page_complete(layout: CacheLayout, page_number: int) -> bool:
@@ -438,24 +493,28 @@ class CacheNoCacheFlags:
         return all(self.as_dict().values())
 
 
+_FALLBACK_SENTINEL_PREFIX: Final[str] = "(vision model unavailable for page"
+
+
 def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
     """True if a cached ``page_NNNN_extract.txt`` exists for this page
     AND its content is a real extractor payload (not a fallback sentinel).
 
     Two sentinel shapes must be rejected:
+
     * Zero-byte file — legacy H1 sentinel: vision model failed and the
       runner wrote an empty placeholder. Trusting it would propagate
       empty markdown into the formatter.
     * Non-empty fallback marker — the runner writes
-      ``_FALLBACK_SENTINEL = "(vision model unavailable for page N; ...)"``
-      on text-layer fallback; trusting that as a real extract would feed
-      the sentinel text into ``--no-cache-extract``'s formatter pass.
+      :data:`FALLBACK_SENTINEL` on text-layer fallback; trusting that as
+      a real extract would feed the sentinel text into the
+      ``--no-cache-extract`` formatter pass.
     """
     path = layout.page_extract_path(page_number)
     if not (path.is_file() and path.stat().st_size > 0):
         return False
     head = path.read_text(encoding="utf-8", errors="replace")[:128]
-    if head.lstrip().startswith("(vision model unavailable for page"):
+    if head.lstrip().startswith(_FALLBACK_SENTINEL_PREFIX):
         return False
     return True
 
@@ -464,6 +523,7 @@ __all__ = [
     "CacheCorruptedError",
     "CacheLayout",
     "CacheNoCacheFlags",
+    "FALLBACK_SENTINEL",
     "MetaInfo",
     "PageArtifacts",
     "atomic_write_text",

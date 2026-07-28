@@ -234,7 +234,7 @@ pdf2md-agent PDF -o OUTPUT [options]
 
 ### Token-budget planner
 
-Each extract call is sized by `pdf2md_agent.token_budget.plan_for_image`:
+Each extract call is sized by `pdf2md_agent.image_budget.plan_for_image` (re-exported via `pdf2md_agent.token_budget`):
 
 1. Estimate the token cost of the **persona** + the **per-page prompt
    variables** (running summary, text-hint, render scaffold).
@@ -406,20 +406,30 @@ Module layout:
 ```
 src/pdf2md_agent/
 ├── __main__.py             # `python -m pdf2md-agent` entry
-├── cli.py                  # argparse + atomic write
-├── config.py               # env loading, defaults
-├── cache.py                # per-PDF cache layout
+├── cli.py                  # CLI entry + per-run orchestration
+├── cli_parser.py           # argparse definition + post-parse resolvers
+├── filesystem_safety.py    # cache-key / Windows-reserved-name helpers
+├── cache.py                # per-PDF cache layout, meta fingerprint, FALLBACK_SENTINEL
 ├── pages.py                # --pages parser
 ├── pdf_renderer.py         # PyMuPDF wrapper
 ├── llm_retry.py            # bounded backoff + transient classifier
-├── token_budget.py         # image/text estimators + planner
+├── token_budget.py         # back-compat shim → token_estimator + image_budget
+├── token_estimator.py      # text + image token heuristics
+├── image_budget.py         # plan_for_image + BudgetDecision (binary search)
 ├── vision.py               # CrewAI LLM factory
 ├── post_stream.py          # cross-page stitcher (StreamingStitcher + heuristic)
+├── post_stream_decision.py # block split + continuation + smart join + CJK detection
+├── post_stream_table.py    # table-row continuation + header dedup
 └── crew/
     ├── agents.py           # extractor / formatter / summarizer personas
     ├── tasks.py            # build_extract_description + factory functions
     ├── multimodal_patch.py # AddImageTool monkey-patch
-    └── runner.py           # per-page crew.kickoff loop
+    ├── runner.py           # per-page pipeline orchestrator
+    ├── extraction.py       # extract → format → reflect → summarize loop
+    ├── page_image.py       # token-budget planning + tiling + downscale
+    ├── fallback.py         # text-layer fallback helpers + sentinel
+    ├── output.py           # _strip_think + _output (CrewAI task output cleanup)
+    └── results.py          # PageResult shared value type
 ```
 
 ### Testing the matrix
