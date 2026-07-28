@@ -37,7 +37,7 @@ _LANG_RULE = (
 _VERBATIM_RULE = (
     "Verbatim rule: copy the page character-for-character — no "
     "translation, summarization, or invented content; write `[illegible]` "
-    "for unreadable glyphs."
+    "for unreadable glyphs; omit page headers, footers, and page numbers."
 )
 
 _SUMMARY_TRUNCATION_SUFFIX = "[…summary truncated to fit context window]"

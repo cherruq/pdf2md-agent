@@ -73,8 +73,8 @@ Output is a single Markdown file. By default the per-page outputs are
 stitched into one continuous document — paragraphs, list items, and table
 rows split across a page break are merged, and the `\n\n---\n\n` page
 separator is dropped. Pass `--stitch-mode off` to restore the legacy
-separator. The original 1-based page numbers are preserved inside the
-content where the formatter emits them.
+separator. Page headers, footers, and page numbers are intentionally omitted
+to ensure clean continuity of paragraphs and tables across pages.
 
 ```bash
 # Convert only a subset of pages (1-based, ranges allowed)
@@ -160,7 +160,7 @@ pdf2md-agent PDF -o OUTPUT [options]
 | `pdf` | path | _(required)_ | Input PDF path. |
 | `-o`, `--output` | path | _(required)_ | Output markdown path (written atomically). |
 | `--dpi` | int | `144` | Render DPI. 72 (smallest), 150 (text + tables), 200 (small fonts / formulas), 300+ usually overkill for vision models. |
-| `-p`, `--pages` | spec | all | `1-5,8,11-13` style subset; 1-based; preserves original page numbers in output. |
+| `-p`, `--pages` | spec | all | `1-5,8,11-13` style subset; 1-based. |
 
 ### Cache control
 | Flag | Type | Default | Notes |
