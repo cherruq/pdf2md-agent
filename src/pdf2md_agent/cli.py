@@ -245,8 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SPEC",
         help=(
             "Subset of pages to convert. Accepts comma-separated pages and "
-            "ranges, e.g. '1-5,8,11-13'. Pages are 1-based; output preserves "
-            "original page numbers and is ordered by document position. "
+            "ranges, e.g. '1-5,8,11-13'. Pages are 1-based; output "
+            "is ordered by document position. "
             "Default: all pages."
         ),
     )
