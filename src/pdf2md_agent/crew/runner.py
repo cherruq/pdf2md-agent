@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import difflib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -173,6 +174,41 @@ class PageResult:
     markdown: str
     summary: str
 
+
+
+def _strip_multipage_headers_footers(text: str, compare_text: str) -> str:
+    """Remove common prefixes and suffixes across pages to avoid coverage penalties."""
+    if not text or not compare_text:
+        return text
+
+    start_trim = 0
+    end_trim = len(text)
+
+    # Strip header: find common match at the very start
+    sm_head = difflib.SequenceMatcher(None, text[:200], compare_text[:200])
+    head_match = sm_head.find_longest_match(0, min(200, len(text)), 0, min(200, len(compare_text)))
+
+    if head_match.size > 5 and head_match.a < 20:
+        start_trim = head_match.a + head_match.size
+
+    # Strip footer: find common match at the very end
+    sm_tail = difflib.SequenceMatcher(None, text[-200:], compare_text[-200:])
+    tail_match = sm_tail.find_longest_match(0, min(200, len(text)), 0, min(200, len(compare_text)))
+
+    if tail_match.size > 5 and (len(text[-200:]) - (tail_match.a + tail_match.size)) < 20:
+        end_trim = max(start_trim, len(text) - 200 + tail_match.a)
+
+    if start_trim < end_trim:
+        trimmed = text[start_trim:end_trim].strip()
+        lines = trimmed.splitlines()
+        # Further strip any lines that are just numbers/dashes (page numbers) at the top or bottom
+        while lines and re.match(r'^\s*[\d\-]+\s*$', lines[0]):
+            lines.pop(0)
+        while lines and re.match(r'^\s*[\d\-]+\s*$', lines[-1]):
+            lines.pop(-1)
+        return "\n".join(lines)
+
+    return text
 
 def run_pipeline(
     *,
@@ -393,15 +429,22 @@ def run_pipeline(
         # Deterministic coverage reflection loop
         reflection_attempts = 0
         max_reflections = 2
-        coverage_threshold = 0.85
+        coverage_threshold = 0.90
+
+        # Pre-process text_hint_str to drop common multipage headers and footers
+        coverage_text_hint = text_hint_str
+        if len(pages) > 1:
+            # Compare with next page if available, else previous page
+            compare_idx = idx + 1 if idx + 1 < len(pages) else idx - 1
+            compare_page = pages[compare_idx]
+            compare_hint = compare_page.text_hint or ""
+            coverage_text_hint = _strip_multipage_headers_footers(coverage_text_hint, compare_hint)
 
         # We only consider non-whitespace/non-punctuation characters for coverage
-        import re
-        import difflib
         def _clean_for_coverage(text: str) -> str:
             return re.sub(r'\s+', '', text)
 
-        native_clean = _clean_for_coverage(text_hint_str)
+        native_clean = _clean_for_coverage(coverage_text_hint)
         needs_coverage_check = len(native_clean) > 20
 
         penalty_prompt = ""
