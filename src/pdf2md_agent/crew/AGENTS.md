@@ -16,23 +16,26 @@ Subpackage containing the agents, task definitions, runner, and a load-bearing m
 
 | Symbol | File:Line | Refs (≈) | Role |
 |---|---|---|---|
-| `run_pipeline` | runner.py:160 | heavy | `CacheNoCacheFlags`-driven per-page pipeline (format → extract → full) |
-| `patch_add_image_tool` | multimodal_patch.py:134 | 1 (called from tasks.py import) | idempotent install; safe to re-call to refresh dims |
-| `_encode_local_image` | multimodal_patch.py:48 | 1 | Pillow LANCZOS downscale + JPEG + b64 |
-| `_to_sentinel` | multimodal_patch.py:102 | 1 | builds `VISION_IMAGE:<media-type>:<b64>` string |
-| `_strip_think` | runner.py:61 | internal | defensive removal of scratchpad tags the configured MiniMax-M3 endpoint occasionally emits |
-| `_persona_backstory` | agents.py:133 | internal | splits persona `"role\n\nbackstory"` (CrewAI's `backstory` reads after `\n\n`) |
-| `_truncate_summary` | tasks.py:57 | internal | head+tail truncation with sentinel; preserves summary shape |
+| `run_pipeline` | runner.py:177 | heavy | `CacheNoCacheFlags`-driven per-page pipeline (format → extract → full) |
+| `patch_add_image_tool` | multimodal_patch.py:180 | 1 (called from tasks.py import) | idempotent install; safe to re-call to refresh dims |
+| `_encode_local_image` | multimodal_patch.py | 1 | Pillow LANCZOS downscale + JPEG + b64 |
+| `_to_data_url` | multimodal_patch.py:110 | 1 | builds `data:image/jpeg;base64,…` URL |
+| `_to_sentinel` | multimodal_patch.py:148 | 1 | builds `VISION_IMAGE:<media-type>:<b64>` string |
+| `_strip_think` | runner.py:69 | internal | defensive removal of scratchpad tags the configured MiniMax-M3 endpoint occasionally emits |
+| `_persona_backstory` | agents.py | internal | splits persona `"role\n\nbackstory"` (CrewAI's `backstory` reads after `\n\n`) |
+| `_truncate_summary` | tasks.py | internal | head+tail truncation with sentinel; preserves summary shape |
+| `_text_layer_fallback` | runner.py:89 | internal | fenced text-layer stub for transient / validation failures |
 | `EXTRACTOR_PERSONA` / `_BACKSTORY` | agents.py | external | exported separately so token-budget planner can pre-compute cost |
-| `MAX_SUMMARY_CHARS` | tasks.py:23 | external | default 800; injected into summary task description |
+| `MAX_SUMMARY_CHARS` | tasks.py | external | default 800; injected into summary task description |
 
 ## CONVENTIONS (specific to this subpackage)
 
 - **Persona strings are short** (~60 words each) to fit `MiniMax-M3`'s 512K-1M context window alongside the page image. Length budgeted in `token_budget.py` before pipeline start.
 - **Persona shape**: `"<role-text>\n\n<backstory-text>"` — CrewAI's `Agent(backstory=...)` only reads what's after the first `\n\n`. `_persona_backstory()` does the partition.
-- **Re-exports with `noqa: F401`** in `runner.py:46,52` (`render_pdf`, `make_vision_llm` re-exported so tests can patch at `pdf2md_agent.crew.runner.<name>`). Do not remove the re-exports.
-- **`patch_add_image_tool()` is invoked at import time** from `tasks.py:20`. Tests that need different dims can re-call it; module-level `_active_long_side` / `_active_jpeg_quality` are updated in place without reinstalling the patch.
-- **`<think>` / `</think>` escaping**: in `runner.py:56-58` and `tasks.py:25-28` written as `chr(60) + "think" + chr(62)` etc. — avoids mangling by downstream XML-processing tools. Do not "refactor" to literal `<think>`.
+- **Re-exports with `noqa: F401`** in `runner.py:54` (`render_pdf`, `PageImage`) and `runner.py:60` (`make_vision_llm`). Tests patch at `pdf2md_agent.crew.runner.<name>` — do not remove the re-exports.
+- **`patch_add_image_tool()` is invoked at import time** from `tasks.py`. Tests that need different dims can re-call it; module-level `_active_long_side` / `_active_jpeg_quality` are updated in place without reinstalling the patch.
+- **`<think>` / `</think>` escaping**: written as `chr(60) + "think" + chr(62)` in `tasks.py` and `runner.py` — avoids mangling by downstream XML-processing tools. Do not "refactor" to literal `<think>`.
+- `PERSONA_VERSION` (in `agents.py`) is the 16-char SHA-256 of the active persona strings. Any edit to a persona changes this hash and invalidates the entire cache (fingerprint field in `meta.json`).
 
 ## ANTI-PATTERNS (this subpackage)
 
@@ -41,12 +44,14 @@ Subpackage containing the agents, task definitions, runner, and a load-bearing m
   - line 45 — `UnidentifiedImageError = OSError` fallback when `PIL.UnidentifiedImageError` isn't importable
   - line 153 — `# type: ignore[override]` (parent `BaseTool._run` has a different signature)
   - line 161 — `# type: ignore[assignment]` (assigning onto foreign class method)
+- **NEVER strip the `# noqa: F401` re-exports in `runner.py:54` and `runner.py:60`** — tests patch `pdf2md_agent.crew.runner.render_pdf` and `make_vision_llm` at these names; removing them forces `create=True` and breaks the test surface.
 - **NEVER import `crewai.tools.agent_tools.add_image_tool` directly in tests.** Tests must monkeypatch `pdf2md_agent.crew.runner.make_vision_llm` (and friends). Direct import path bypasses the patched `_run` and reintroduces the original bug.
 - **NEVER catch and suppress `ValidationError` inside `run_pipeline`** — the fallback path `_text_layer_fallback` depends on it propagating.
-- `runner.py:404` uses `except BaseException` — that is intentional for retry-exhaustion cleanup. Do not narrow to `Exception`.
+- **NEVER narrow `except BaseException` to `Exception`** in `runner.py:477` (per-page retry-exhaustion path) or `runner.py:640` (`_run_format_summarize_only` retry-exhaustion path). Both are intentional for cleanup before re-raise.
 
 ## NOTES
 
 - `multimodal_patch.py` reads module-level globals (`_patched: bool`, `_active_long_side`, `_active_jpeg_quality`). Tests that mutate these must reset them in `finally` (or use `monkeypatch.setattr` which handles cleanup).
 - The patch returns `str` (the `VISION_IMAGE:` sentinel), not a dict. CrewAI's `StepExecutor` requires the str shape; tests assert on the str.
 - Tasks propagate `_NO_REASONING` (the chr-escaped phrase) into the agent's `system` instruction to keep prompts tight.
+- `--no-cache-format` short-circuits the entire per-page pipeline when `format.md` is on disk (uses `is_page_complete` in `cache.py`); `--no-cache-extract` triggers `_run_format_summarize_only` to re-use cached `extract.txt`.
