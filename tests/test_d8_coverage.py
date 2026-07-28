@@ -276,7 +276,7 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
              PageResult(page_number=1, markdown="stitched body", summary=""),
          ]), \
          patch.object(cli, "stitch_pages", return_value="stitched body") as mock_stitch, \
-         patch.object(cli, "_atomic_write_text") as mock_atomic, \
+         patch.object(cli, "atomic_write_text") as mock_atomic, \
          patch.object(cli, "write_meta"):
         layout.pages_dir.mkdir(parents=True, exist_ok=True)
         from PIL import Image as _PIL
