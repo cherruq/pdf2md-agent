@@ -128,7 +128,7 @@ uv run python -m pdf2md_agent input.pdf -o out.md   # equivalent entry
 ## NOTES
 
 - Cache key = PDF stem (≤ 60 chars, no path separators) **or** the first 16 chars of `sha256(absolute PDF path)`. Two PDFs at different absolute paths always land in different cache directories.
-- `meta.json` carries a 6-field fingerprint (`pdf`, `dpi`, `with_summary`, `pages`, `model`, `persona_version`). A drift in any field forces a re-run on the next invocation. The persona version is the SHA-256 of the active persona strings, so editing a persona invalidates all dependent cache files.
+- `meta.json` carries a 6-field fingerprint (`pdf`, `dpi`, `with_summary`, `pages`, `model`, `persona_version`). A drift in `pdf`, `dpi`, `with_summary`, `model`, or `persona_version` forces a re-run on the next invocation; a drift in `pages` alone is informational only and surfaces as a stderr warning (the runner continues, reusing any cached per-page outputs and processing the missing ones fresh). The persona version is the SHA-256 of the active persona strings, so editing a persona invalidates all dependent cache files.
 - Version is duplicated: `pyproject.toml` and `src/pdf2md_agent/__about__.py` both pin `0.2.0` — update both together.
 - `--no-cache-format` short-circuits the entire per-page pipeline when `format.md` is on disk. `--no-cache-extract` re-runs only the formatter when `extract.txt` is on disk. `--no-cache-all` is the universal kill switch.
 - The MiniMax-M3 endpoint occasionally returns scratchpad blocks (delimited by XML-like tags) in formatter output; `_strip_think()` in `crew/output.py` removes them defensively.
