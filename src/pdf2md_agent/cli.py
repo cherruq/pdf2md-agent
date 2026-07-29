@@ -272,15 +272,35 @@ def _run_pipeline(
                 persona_version=args.persona_version,
             )
             if reasons:
-                for r in reasons:
-                    print(f"error: cache invalid: {r}", file=sys.stderr)
-                print(
-                    "error: meta.json fingerprint drift detected. "
-                    "re-run with --no-cache-all or wipe "
-                    f"{layout.root} to rebuild the cache.",
-                    file=sys.stderr,
-                )
-                return 1
+                # ``pages`` is informational only: per-page outputs are
+                # reused via file-existence checks (``is_page_complete`` /
+                # ``maybe_skip_render``), so a wider cached page set is
+                # always safe to reuse. Only the missing pages get
+                # processed. All other fingerprint fields indicate real
+                # stale-output risk and must hard-fail.
+                warning_reasons = [
+                    r for r in reasons if r.startswith("pages changed:")
+                ]
+                fatal_reasons = [
+                    r for r in reasons if not r.startswith("pages changed:")
+                ]
+                for r in warning_reasons:
+                    print(
+                        f"warning: cache note: {r} "
+                        "(continuing; cached outputs reused, "
+                        "missing pages will be processed)",
+                        file=sys.stderr,
+                    )
+                if fatal_reasons:
+                    for r in fatal_reasons:
+                        print(f"error: cache invalid: {r}", file=sys.stderr)
+                    print(
+                        "error: meta.json fingerprint drift detected. "
+                        "re-run with --no-cache-all or wipe "
+                        f"{layout.root} to rebuild the cache.",
+                        file=sys.stderr,
+                    )
+                    return 1
         write_meta(
             layout.meta_path,
             pdf=args.pdf,
