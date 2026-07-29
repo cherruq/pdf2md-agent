@@ -1,6 +1,6 @@
 [project]
 name = "pdf2md-agent"
-version = "0.2.0"
+version = "0.2.1"
 description = "Convert PDF documents to language-preserving Markdown by rendering each page to an image and feeding it through a CrewAI pipeline of vision agents. Defaults to the MiniMax-M3 OpenAI-compatible endpoint; any vision LLM behind an OpenAI-style API works via OPENAI_BASE_URL."
 requires-python = ">=3.10"
 dependencies = [
