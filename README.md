@@ -316,8 +316,11 @@ cache_dir = f".pdf2md-agent-cache/{key}/"
 
 `meta.json` carries a 6-field fingerprint (`pdf`, `dpi`, `with_summary`,
 `pages`, `model`, `persona_version`). On every page the runner compares
-the on-disk fingerprint with the current run's configuration; a drift
-in any field forces a re-run. The persona version is the 16-char
+the on-disk fingerprint with the current run's configuration. A drift in
+`pdf`, `dpi`, `with_summary`, `model`, or `persona_version` forces a
+re-run; a drift in `pages` alone is informational and surfaces as a
+stderr warning, because per-page outputs are reused incrementally via
+file-existence checks regardless. The persona version is the 16-char
 SHA-256 of the active persona strings, so a text change in any
 (extractor / formatter / summarizer) persona invalidates the cache.
 
