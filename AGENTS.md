@@ -60,6 +60,7 @@ pdf2md-agent/
 | Pipeline orchestration | `src/pdf2md_agent/crew/` |
 | CLI / cache / retry / budget math | `src/pdf2md_agent/` |
 | Test conventions (mocking, fixtures, run cmd) | `tests/AGENTS.md` |
+| End-to-end PDF + Markdown fixtures | `scripts/test_fixtures/<name>/{generate.py,verify.py,<name>.pdf,<name>.md}` |
 
 ## CODE MAP (top exports)
 
@@ -100,6 +101,7 @@ pdf2md-agent/
 - Cache control flags use the inverted `--no-cache-<resource>` pattern; resource names (render, text, resized, extract, format, summary) match the on-disk filenames exactly.
 - `# type: ignore` and `# noqa: XXXX` may only be used **with an explanatory inline comment** (CONTRIBUTING.md:57-60). Stripping the comment is a violation even if the suppression itself stays.
 - `secrets.SystemRandom()` (not `random`) for retry jitter — backoff sequences cannot sync across parallel clients (`llm_retry.py:30`).
+- End-to-end PDF/Markdown fixtures live in `scripts/test_fixtures/<name>/` (PEP 723 `generate.py` + `verify.py` + the paired `.md` / `.pdf`), not in `tests/`. `tests/AGENTS.md` forbids committed rendered PDFs and `.pdf2md-agent-cache/`; the `scripts/` directory is outside pytest's auto-discovery and is the home for committed, reproducible PDF regression material. Override the CJK font with `FIXTURE_FONT_PATH=/path/to/uming.ttc` if the default lookup fails.
 
 ## ANTI-PATTERNS (do not violate)
 
@@ -123,6 +125,8 @@ uv run pytest                    # run all tests (no API needed)
 uv run pytest -ra tests/         # CI-equivalent: -ra = summary, no passed lines
 uv run pdf2md-agent input.pdf -o out.md
 uv run python -m pdf2md_agent input.pdf -o out.md   # equivalent entry
+uv run scripts/test_fixtures/cross_page_header_footer/generate.py   # regenerate the cross-page header/footer fixture
+uv run scripts/test_fixtures/cross_page_header_footer/verify.py     # assert the fixture matches its paired Markdown
 ```
 
 ## NOTES
