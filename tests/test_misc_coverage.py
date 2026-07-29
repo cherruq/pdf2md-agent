@@ -423,3 +423,81 @@ def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
     post = read_meta(layout.meta_path)
     assert post is not None
     assert Path(post.pdf) == pdf_path.resolve()
+
+
+def test_meta_fingerprint_pages_drift_is_warning_not_error(
+    tmp_path: Path,
+) -> None:
+    """Regression: a ``--pages`` subset change between runs must NOT hard-fail.
+
+    Per-page outputs are incrementally reused via file-existence checks, so
+    a wider cached page set is always safe to reuse — the missing pages get
+    processed regardless. The ``pages`` field of ``meta.json`` is treated as
+    informational and surfaces as a stderr warning, not a fatal drift.
+    Companions ``test_meta_fingerprint_drift_refuses_run`` and
+    ``test_meta_fingerprint_drift_bypassed_by_no_cache_all`` above already
+    prove every other fingerprint field still hard-fails.
+    """
+    from pdf2md_agent.cache import write_meta
+
+    pdf_path = _make_pdf(tmp_path / "input.pdf", pages=8)
+
+    cache_root = tmp_path / "cache"
+    layout = CacheLayout.for_pdf(cache_root, pdf_path)
+    # Simulate a previous full run (no --pages) — meta records pages=None.
+    # Use the CLI's own defaults for ``model`` / ``persona_version`` so the
+    # only drift reason is the intentional ``pages`` mismatch.
+    write_meta(
+        layout.meta_path,
+        pdf=pdf_path,
+        dpi=144,
+        with_summary=True,
+        pages=None,
+        model=MODEL_NAME,
+        persona_version=agents.PERSONA_VERSION,
+    )
+
+    captured: dict[str, str] = {"stderr": ""}
+
+    def _capture_print(*args, **kwargs) -> None:
+        if kwargs.get("file", None) is sys.stderr:
+            captured["stderr"] += (args[0] if args else "") + "\n"
+
+    with patch.object(cli, "_render_pages", return_value=[]), \
+         patch.object(cli, "make_vision_llm", return_value=object()), \
+         patch.object(cli, "run_pipeline", return_value=[]), \
+         patch.object(cli, "stitch_pages", return_value=""), \
+         patch("builtins.print", side_effect=_capture_print):
+        rc = cli.main([
+            str(pdf_path),
+            "-o", str(tmp_path / "out.md"),
+            "--dpi", "144",
+            "--pages", "1-3,7",
+            "--intermediates-dir", str(cache_root),
+        ])
+    assert rc == 0, (
+        f"pages drift must not hard-fail (rc={rc}); stderr={captured['stderr']!r}"
+    )
+    assert "warning: cache note: pages changed" in captured["stderr"]
+    assert "continuing" in captured["stderr"]
+    assert "error: cache invalid" not in captured["stderr"]
+    assert "fingerprint drift detected" not in captured["stderr"]
+
+
+def _make_pdf(path: Path, pages: int = 1) -> Path:
+    """Synthesize a minimal multi-page PDF for CLI page-resolution tests.
+
+    Mirror of ``tests/test_render_skip.py:_make_pdf``; duplicated locally to
+    keep ``test_misc_coverage.py`` free of inter-file dependencies.
+    """
+    doc = pymupdf.open()
+    try:
+        for _ in range(pages):
+            doc.new_page()
+        doc.save(str(path))
+    finally:
+        doc.close()
+    return path
+
+
+
