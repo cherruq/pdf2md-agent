@@ -1,14 +1,11 @@
-"""Per-page task factories: chain extract → format → summarize.
+"""Per-page task factories: extract → format.
 
-Each task description embeds three small behavioral rules instead of long
-boilerplate — every rule is now a single sentence. A
-``MAX_SUMMARY_CHARS`` budget is enforced both when the previous summary is
-fed *in* (truncated to fit) and when the summarizer is asked to emit
-(constrained via the task prompt).
+Each task description embeds small behavioral rules instead of long boilerplate.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from crewai import Agent, Task
 
@@ -18,9 +15,6 @@ from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
 # re-encodes them as JPEG (long-side capped) before sending them to
 # OpenAI-compatible vision APIs (which reject bare paths and oversized images).
 patch_add_image_tool()
-
-# Defaults — runner may override via max_summary_chars parameter.
-MAX_SUMMARY_CHARS: int = 800
 
 _NO_REASONING = (
     "Output ONLY final content; no reasoning, preamble, or "
@@ -37,23 +31,21 @@ _LANG_RULE = (
 _VERBATIM_RULE = (
     "Verbatim rule: copy the page character-for-character — no "
     "translation, summarization, or invented content; write `[illegible]` "
-    "for unreadable glyphs; omit page headers, footers, and page numbers."
+    "for unreadable glyphs; omit running page-margin headers, footers, "
+    "and page numbers, but MUST preserve document titles and headings."
 )
 
-_SUMMARY_TRUNCATION_SUFFIX = "[…summary truncated to fit context window]"
-
-# Joined rule text shared by every task that asks the LLM to write verbatim
-# Markdown: the formatter factory (and its file-fed sibling) and the
-# extractor's task description. The ``chr(60)/chr(62)`` escape around
-# ``<think>`` is load-bearing (see AGENTS.md → crew/ → CONVENTIONS); do not
-# "refactor" to a literal tag.
 _COMMON_TASK_RULES: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
 
-# Joined rule text consumed by the token-budget planner.
 TASKS_RULES_TEXT: str = _COMMON_TASK_RULES
 
 
-def extract_task_intro(page_path: Path, available_images: list[str] = None, is_tiled: bool = False, tile_paths: list[Path] = None) -> str:
+def extract_task_intro(
+    page_path: Path,
+    available_images: list[str] | None = None,
+    is_tiled: bool = False,
+    tile_paths: list[Path] | None = None,
+) -> str:
     if is_tiled and tile_paths:
         tile_str = ", ".join(f"`{p}`" for p in tile_paths)
         intro = (
@@ -76,32 +68,6 @@ def extract_task_intro(page_path: Path, available_images: list[str] = None, is_t
     return intro
 
 
-def _truncate_summary(text: str, max_chars: int) -> str:
-    """Return ``text`` trimmed to ``max_chars``, preserving head + tail.
-
-    The middle is dropped so the most recent running context (tail) and the
-    high-level topic (head) both survive. A sentinel suffix tells the
-    extractor agent that the visible state is incomplete. When
-    ``max_chars`` cannot fit the full marker, the text is truncated
-    without a marker so the returned string is guaranteed to satisfy
-    ``len(result) <= max_chars``.
-    """
-    if max_chars <= 0 or len(text) <= max_chars:
-        return text
-    full_marker = len(_SUMMARY_TRUNCATION_SUFFIX) + 2
-    if max_chars < full_marker:
-        return text[:max_chars]
-    suffix = _SUMMARY_TRUNCATION_SUFFIX
-    budget = max_chars - len(suffix) - 2
-    head_budget = budget // 2
-    tail_budget = budget - head_budget
-    head = text[:head_budget].rstrip()
-    tail = text[-tail_budget:].lstrip() if tail_budget > 0 else ""
-    if tail:
-        return f"{head}\n{suffix}\n{tail}"
-    return f"{head}\n{suffix}"
-
-
 def _text_hint_block(text: str) -> str:
     """Build the text-hint block appended to the extract task, or empty string."""
     text = text.strip()
@@ -119,34 +85,17 @@ def _text_hint_block(text: str) -> str:
     )
 
 
-def _summary_block(summary: str) -> str:
-    return (
-        f"Running summary of preceding pages:\n{summary}\n\n"
-        if summary.strip()
-        else ""
-    )
-
-
 def build_extract_description(
     page_path: Path,
-    text_hint: str,
-    previous_summary: str,
-    *,
-    max_summary_chars: int = MAX_SUMMARY_CHARS,
-    available_images: list[str] = None,
+    text_hint: str = "",
+    *args: Any,
+    available_images: list[str] | None = None,
     is_tiled: bool = False,
-    tile_paths: list[Path] = None,
+    tile_paths: list[Path] | None = None,
+    **kwargs: Any,
 ) -> str:
-    """Build the exact description string the extract task sends to the LLM.
-
-    Shared between ``make_extract_task`` (which wraps it in a CrewAI Task)
-    and the runner's token-budget planner (which needs to estimate the cost
-    of the same prompt), guaranteeing the budget never diverges from the
-    real payload.
-    """
-    safe_summary = _truncate_summary(previous_summary, max_summary_chars)
+    """Build the exact description string the extract task sends to the LLM."""
     return (
-        f"{_summary_block(safe_summary)}"
         f"{_text_hint_block(text_hint)}"
         f"{extract_task_intro(page_path, available_images, is_tiled, tile_paths)}"
         f"{TASKS_RULES_TEXT}"
@@ -157,19 +106,16 @@ def make_extract_task(
     extractor: Agent,
     page_path: Path,
     text_hint: str = "",
-    previous_summary: str = "",
-    *,
-    max_summary_chars: int = MAX_SUMMARY_CHARS,
-    available_images: list[str] = None,
+    *args: Any,
+    available_images: list[str] | None = None,
     is_tiled: bool = False,
-    tile_paths: list[Path] = None,
+    tile_paths: list[Path] | None = None,
+    **kwargs: Any,
 ) -> Task:
-    """Create the page-extraction task with image + text hint + cross-page context."""
+    """Create the page-extraction task with image + text hint."""
     description = build_extract_description(
         page_path,
         text_hint,
-        previous_summary,
-        max_summary_chars=max_summary_chars,
         available_images=available_images,
         is_tiled=is_tiled,
         tile_paths=tile_paths,
@@ -203,18 +149,7 @@ def make_format_task_from_extract_file(
     formatter: Agent,
     extract_path: Path,
 ) -> Task:
-    """Format task fed from a cached ``page_NNNN_extract.txt`` on disk.
-
-    Used when the runner trusts the cached extract (the ``--no-cache-extract``
-    flag is unset) but still wants a fresh formatter pass — typically a
-    resume-after-failure retry, or a manual re-run where only the formatter
-    has changed. The file's full text is pasted into the description as a
-    fenced block, matching the ``_text_hint_block`` seam so the runner has
-    no new tool surface to maintain.
-
-    Caller is responsible for ensuring the file exists (gate on
-    ``cache.has_cached_extract`` first).
-    """
+    """Format task fed from a cached ``page_NNNN_extract.txt`` on disk."""
     text = extract_path.read_text(encoding="utf-8")
     return Task(
         description=(
@@ -231,38 +166,4 @@ def make_format_task_from_extract_file(
         expected_output="Clean CommonMark markdown of the page, language preserved",
         agent=formatter,
         context=[],
-    )
-
-
-def make_summarize_task(
-    summarizer: Agent,
-    format_task: Task,
-    previous_summary: str,
-    *,
-    max_chars: int = MAX_SUMMARY_CHARS,
-) -> Task:
-    """Create the summary-update task; sees current page + previous summary."""
-    previous_block = (
-        f"Previous running summary:\n{previous_summary}\n\n"
-        if previous_summary.strip()
-        else "This is the first page; start a fresh summary.\n\n"
-    )
-    return Task(
-        description=(
-            f"{previous_block}"
-            f"Update the running summary to incorporate the current page. "
-            f"Keep the output under {max_chars} characters — preserve named "
-            f"entities, running arguments, and unresolved threads; "
-            f"drop settled details. If the previous summary was truncated "
-            f"to fit the context window, prioritize newly visible content "
-            f"when absorbing this page.\n\n"
-            f"{_LANG_RULE}\n\n"
-            f"{_NO_REASONING}"
-        ),
-        expected_output=(
-            f"Updated running summary, ≤ {max_chars} characters, "
-            "language matches source"
-        ),
-        agent=summarizer,
-        context=[format_task],
     )

@@ -122,8 +122,6 @@ def prepare_page_image(
     page: PageImage,
     layout: CacheLayout,
     text_hint_str: str,
-    summary: str,
-    max_summary_chars: int,
     ctx_limit: int,
     image_long_side: int,
     image_min_long_side: int,
@@ -133,6 +131,7 @@ def prepare_page_image(
     total: int,
     extractor_persona_text: str,
     phases: str,
+    **_kwargs: object,
 ) -> PreparedPage:
     """Plan and produce the image(s) the extractor should attach.
 
@@ -144,8 +143,7 @@ def prepare_page_image(
     """
     persona_tokens = estimate_text_tokens(extractor_persona_text)
     description_for_budget = build_extract_description(
-        page.image_path, text_hint_str, summary,
-        max_summary_chars=max_summary_chars,
+        page.image_path, text_hint_str
     )
     fixed_text_tokens = estimate_text_tokens(description_for_budget)
     decision = plan_for_image(

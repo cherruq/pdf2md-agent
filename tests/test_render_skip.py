@@ -133,7 +133,6 @@ def test_render_skip_honours_no_cache_render_flag(
         pages=None,
         no_intermediates=False,
         intermediates_dir=None,
-        no_summary=False,
         no_text_hint=False,
         no_fallback_to_text=False,
         no_cache_render=False,
@@ -141,7 +140,6 @@ def test_render_skip_honours_no_cache_render_flag(
         no_cache_resized=False,
         no_cache_extract=False,
         no_cache_format=False,
-        no_cache_summary=False,
         no_cache_all=False,
         max_retries=None,
         retry_initial_delay=None,
@@ -149,16 +147,14 @@ def test_render_skip_honours_no_cache_render_flag(
         retry_jitter=None,
         image_long_side=None,
         image_quality=None,
-        max_summary_chars=None,
         ctx_limit=None,
         stitch_mode="heuristic",
         request_timeout=None,
         model="m",
-        persona_version="0123456789abcdef",
     )
 
     def _fake_run_pipeline(*_args: object, **_kwargs: object) -> list[PageResult]:
-        return [PageResult(page_number=1, markdown="hello", summary="")]
+        return [PageResult(page_number=1, markdown="hello")]
 
     monkeypatch.setattr("pdf2md_agent.cli.run_pipeline", _fake_run_pipeline)
     monkeypatch.setattr(

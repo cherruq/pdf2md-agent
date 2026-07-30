@@ -25,8 +25,6 @@ from typing import Callable
 
 from pdf2md_agent import __about__
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
-from pdf2md_agent.config import MODEL_NAME
-from pdf2md_agent.crew.agents import PERSONA_VERSION
 from pdf2md_agent.filesystem_safety import cache_key_for_pdf, safe_cache_stem
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec
@@ -44,7 +42,6 @@ _NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
     "resized",
     "extract",
     "format",
-    "summary",
 )
 
 
@@ -144,7 +141,6 @@ def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
         resized=bool(args.no_cache_resized),
         extract=bool(args.no_cache_extract),
         format=bool(args.no_cache_format),
-        summary=bool(args.no_cache_summary),
     )
 
 
@@ -173,7 +169,6 @@ def _resolve_layout(
         CacheLayout(
             root=td,
             pages_dir=pages,
-            summary_path=td / "summary.json",
             meta_path=td / "meta.json",
         ),
         pages,
@@ -206,19 +201,9 @@ def build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
                 if cli_max_attempts is not None
                 else RETRY_MAX_ATTEMPTS
             ),
-            initial_delay=(
-                args.retry_initial_delay
-                if args.retry_initial_delay is not None
-                else RETRY_INITIAL_DELAY
-            ),
-            max_delay=(
-                args.retry_max_delay
-                if args.retry_max_delay is not None
-                else RETRY_MAX_DELAY
-            ),
-            jitter=(
-                args.retry_jitter if args.retry_jitter is not None else RETRY_JITTER
-            ),
+            initial_delay=RETRY_INITIAL_DELAY,
+            max_delay=RETRY_MAX_DELAY,
+            jitter=RETRY_JITTER,
         )
     except ValueError as exc:
         print(f"error: invalid retry argument: {exc}", file=__import__("sys").stderr)
@@ -233,12 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="pdf2md-agent",
         description=(
             "Render every page of a PDF to an image and feed it through a "
-            "CrewAI pipeline (extract → format → summarize) to produce "
+            "CrewAI pipeline (extract → format) to produce "
             "language-preserving Markdown.\n\n"
-            "Stages: render → extract → format → summarize → stitch.\n\n"
-            "Cache: per-resource (render/text/resized/extract/format/summary) "
-            "is reused by default and gated by meta.json fingerprint validation "
-            "(pdf_path, dpi, with_summary, pages, model, persona_version). "
+            "Stages: render → extract → format → stitch.\n\n"
+            "Cache: per-resource (render/text/resized/extract/format) "
+            "is reused by default and gated by meta.json file path validation. "
             "Any drift → fail loud.\n\n"
             "--no-cache-<resource> opts out a specific resource from cache reuse. "
             "--no-cache-all disables all cache reuse. --no-<feature> disables an "
@@ -311,7 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="no_cache_all",
         help=(
             "Disable every cache reuse (render/text/resized/extract/"
-            "format/summary). Equivalent to passing all six --no-cache-* "
+            "format). Equivalent to passing all five --no-cache-* "
             "flags."
         ),
     )
@@ -321,24 +305,9 @@ def build_parser() -> argparse.ArgumentParser:
         "Optional features; each --no-<feature> opts a single feature out.",
     )
     features.add_argument(
-        "--no-summary",
-        action="store_true",
-        help="Disable cross-page running summary (process each page independently).",
-    )
-    features.add_argument(
         "--no-text-hint",
         action="store_true",
         help="Disable feeding the PDF's native text layer to the extractor.",
-    )
-    features.add_argument(
-        "--no-fallback-to-text",
-        action="store_true",
-        default=False,
-        dest="no_fallback_to_text",
-        help=(
-            "On retry exhaustion, raise instead of falling back to the PDF's "
-            "native text layer. Default: fallback enabled."
-        ),
     )
     features.add_argument(
         "--stitch-mode",
@@ -367,43 +336,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     tuning.add_argument(
-        "--retry-initial-delay",
-        type=float,
-        default=None,
-        help=(
-            "Initial retry delay in seconds (Fibonacci base unit). Must be "
-            "> 0; a zero or negative value is rejected. Overrides "
-            "PDF2MD_AGENT_RETRY_INITIAL_DELAY. Default: 1.0."
-        ),
-    )
-    tuning.add_argument(
-        "--retry-max-delay",
-        type=float,
-        default=None,
-        help=(
-            "Per-attempt retry delay cap in seconds (Fibonacci growth cap). "
-            "Overrides PDF2MD_AGENT_RETRY_MAX_DELAY. Default: 900.0 (15 min)."
-        ),
-    )
-    tuning.add_argument(
-        "--retry-jitter",
-        type=float,
-        default=None,
-        help=(
-            "Jitter ratio in [0.0, 1.0] applied to each retry delay to avoid "
-            "thundering-herd. Overrides PDF2MD_AGENT_RETRY_JITTER. Default: 0.25."
-        ),
-    )
-    tuning.add_argument(
         "--image-long-side",
         type=_positive_int_type("image-long-side", 64),
         default=None,
         metavar="PX",
         help=(
-            "Long-side cap (pixels) for inlined page images. The runner "
-            "rescales each page PNG to this size as JPEG at the configured "
-            "quality before base64-encoding it. Lower values shrink the per-"
-            "call token cost at the expense of OCR fidelity. Overrides "
+            "Long-side cap (pixels) for inlined page images. Overrides "
             "PDF2MD_AGENT_IMAGE_LONG_SIDE. Default: 1536."
         ),
     )
@@ -413,21 +351,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="Q",
         help=(
-            "JPEG quality (1-100) used when the runner downsamples page "
-            "images. Higher values preserve detail but enlarge the per-call "
-            "token cost. 75-95 is the practical sweet spot. Overrides "
-            "PDF2MD_AGENT_IMAGE_JPEG_QUALITY. Default: 85."
-        ),
-    )
-    tuning.add_argument(
-        "--max-summary-chars",
-        type=_positive_int_type("max-summary-chars", 100),
-        default=None,
-        metavar="N",
-        help=(
-            "Maximum running-summary size (characters) fed into the next "
-            "page's extract call and produced by the summarizer. Overrides "
-            "PDF2MD_AGENT_MAX_SUMMARY_CHARS. Default: 800."
+            "JPEG quality (1-100) used when downsampling page images. "
+            "Overrides PDF2MD_AGENT_IMAGE_JPEG_QUALITY. Default: 85."
         ),
     )
     tuning.add_argument(
@@ -437,9 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TOK",
         help=(
             "Model context-window token limit the runner budgets against. "
-            "Overrides PDF2MD_AGENT_CTX_LIMIT. Default: probed from "
-            "OPENAI_BASE_URL/models, or the hardcoded value for the "
-            "active model."
+            "Overrides PDF2MD_AGENT_CTX_LIMIT."
         ),
     )
     tuning.add_argument(
@@ -450,28 +373,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Per-attempt wall-clock timeout (seconds, 0.1-600). Overrides "
             "PDF2MD_AGENT_REQUEST_TIMEOUT. Default: 60.0."
-        ),
-    )
-
-    diagnostic = parser.add_argument_group(
-        "Diagnostic",
-        "Inspection flags; rarely needed in normal runs.",
-    )
-    diagnostic.add_argument(
-        "--model",
-        default=MODEL_NAME,
-        help=(
-            "Model name to record in meta.json for fingerprint validation. "
-            "Defaults to PDF2MD_AGENT_MODEL (default: MiniMax-M3)."
-        ),
-    )
-    diagnostic.add_argument(
-        "--persona-version",
-        default=PERSONA_VERSION,
-        help=(
-            "Persona fingerprint (16-char hex) recorded in meta.json. The "
-            "runner refuses to re-use cache when this drifts. Defaults to "
-            "the SHA-256[:16] of the active persona strings."
         ),
     )
 

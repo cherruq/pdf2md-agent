@@ -4,14 +4,7 @@ The vision model occasionally under-transcribes a page (e.g. drops a
 column of a table). When the runner has access to the PDF's native text
 layer it can detect that drift cheaply via
 :func:`difflib.SequenceMatcher` and re-run the extractor with a penalty
-prompt — a deterministic, no-LLM "reflection" loop. This module owns:
-
-* :func:`run_extraction_loop` — the main extract → format → (optional)
-  reflect → (optional) summarize crew run for a single page. Returns a
-  :class:`ExtractionOutcome` describing the success path or a fallback.
-* :func:`_strip_multipage_headers_footers` — strip header/footer lines
-  that recur across neighbouring pages, used to lower the noise floor of
-  the coverage comparison.
+prompt — a deterministic, no-LLM "reflection" loop.
 """
 from __future__ import annotations
 
@@ -20,6 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from crewai import LLM, Process
 from pydantic import ValidationError
@@ -43,22 +37,13 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 @dataclass(frozen=True, slots=True)
 class ExtractionOutcome:
-    """Result of one page's extraction loop.
-
-    * ``succeeded`` — the crew returned a usable extract + format
-      payload. ``extract_text`` and ``format_md`` are non-empty; the
-      runner should write them to disk and append a :class:`PageResult`.
-    * ``fell_back`` — vision model failed; ``page_result`` is the
-      text-layer fallback to append to the results list instead.
-    """
+    """Result of one page's extraction loop."""
 
     succeeded: bool
     fell_back: bool
     page_result: PageResult | None
     extract_text: str
     format_md: str
-    summary_out: str
-    summarize_t: object | None
 
 
 def _strip_multipage_headers_footers(text: str, compare_text: str) -> str:
@@ -69,7 +54,6 @@ def _strip_multipage_headers_footers(text: str, compare_text: str) -> str:
     start_trim = 0
     end_trim = len(text)
 
-    # Header: longest match starting at offset 0 (within first 200 chars).
     sm_head = difflib.SequenceMatcher(None, text[:200], compare_text[:200])
     head_match = sm_head.find_longest_match(
         0, min(200, len(text)), 0, min(200, len(compare_text))
@@ -77,7 +61,6 @@ def _strip_multipage_headers_footers(text: str, compare_text: str) -> str:
     if head_match.size > 5 and head_match.a < 20:
         start_trim = head_match.a + head_match.size
 
-    # Footer: longest match ending at the last 200 chars.
     sm_tail = difflib.SequenceMatcher(None, text[-200:], compare_text[-200:])
     tail_match = sm_tail.find_longest_match(
         0, min(200, len(text)), 0, min(200, len(compare_text))
@@ -88,7 +71,6 @@ def _strip_multipage_headers_footers(text: str, compare_text: str) -> str:
     if start_trim < end_trim:
         trimmed = text[start_trim:end_trim].strip()
         lines = trimmed.splitlines()
-        # Strip lone page-number / dash-only lines at either end.
         while lines and re.match(r"^\s*[\d\-]+\s*$", lines[0]):
             lines.pop(0)
         while lines and re.match(r"^\s*[\d\-]+\s*$", lines[-1]):
@@ -113,28 +95,19 @@ _PENALTY_PROMPT = (
 
 def _build_crew(
     *,
-    extractor,
-    formatter,
-    summarizer,
+    extractor: Any,
+    formatter: Any,
     prepared: PreparedPage,
     text_hint_str: str,
-    summary: str,
-    max_summary_chars: int,
     penalty_prompt: str,
     available_images: list[str],
-):
-    """Construct the (extract → format → summarize) crew for one attempt.
-
-    CrewAI tasks hold per-attempt state, so the crew must be reconstructed
-    on every reflection iteration to avoid leaking the previous attempt's
-    context.
-    """
+    **_kwargs: object,
+) -> tuple[Any, Any, Any]:
+    """Construct the (extract → format) crew for one attempt."""
     extract_t = _runner.make_extract_task(
         extractor,
         prepared.attach_image_path,
         text_hint=text_hint_str + penalty_prompt,
-        previous_summary=summary,
-        max_summary_chars=max_summary_chars,
         available_images=available_images,
         is_tiled=prepared.is_tiled,
         tile_paths=prepared.tile_paths,
@@ -143,21 +116,13 @@ def _build_crew(
     tasks = [extract_t, format_t]
     agents_list = [extractor, formatter]
 
-    summarize_t = None
-    if summarizer is not None:
-        summarize_t = _runner.make_summarize_task(
-            summarizer, format_t, summary, max_chars=max_summary_chars
-        )
-        tasks.append(summarize_t)
-        agents_list.append(summarizer)
-
     crew = _runner.Crew(
         agents=agents_list,
         tasks=tasks,
         process=Process.sequential,
         verbose=False,
     )
-    return crew, extract_t, format_t, summarize_t
+    return crew, extract_t, format_t
 
 
 def _maybe_reflect(
@@ -169,12 +134,6 @@ def _maybe_reflect(
     coverage_text_hint: str,
     reflection_attempts: int,
 ) -> tuple[bool, str]:
-    """Decide whether the current attempt missed text and needs another pass.
-
-    Returns ``(should_continue, penalty_prompt_for_next_attempt)``. The
-    caller loops while ``should_continue`` is True, up to
-    ``_REFLECTION_MAX_ATTEMPTS`` total reflections.
-    """
     if reflection_attempts >= _REFLECTION_MAX_ATTEMPTS:
         return False, ""
 
@@ -209,38 +168,20 @@ def run_extraction_loop(
     total: int,
     prepared: PreparedPage,
     text_hint_str: str,
-    summary: str,
-    with_summary: bool,
     llm: LLM,
     retry_config: RetryConfig | None,
-    fallback_to_text: bool,
-    max_summary_chars: int,
     request_timeout_seconds: float | None,
     assets_dir: Path | None,
+    fallback_to_text: bool = True,
+    **_kwargs: object,
 ) -> ExtractionOutcome:
-    """Run extract → format → (reflect) → (summarize) for one page.
-
-    On a transient retry exhaustion (or :class:`ValidationError` from a
-    malformed task output) the function writes a fenced text-layer
-    fallback and returns it via :attr:`ExtractionOutcome.page_result` so
-    the runner can append it to the results list instead of the normal
-    output.
-
-    On success it returns ``succeeded=True`` with the freshly extracted
-    text + formatted markdown + (optional) new summary; the caller is
-    responsible for writing them to disk and threading the new summary
-    into the next page.
-    """
+    """Run extract → format → (reflect) for one page."""
     extractor = _runner.make_extractor(llm)
     formatter = _runner.make_formatter(llm)
-    summarizer = _runner.make_summarizer(llm) if with_summary else None
 
-    # Strip recurring multi-page headers/footers from the text-hint before
-    # comparing against the model's output — pages with the same running
-    # header would otherwise fail the coverage check.
     coverage_text_hint = text_hint_str
     if len(all_pages) > 1:
-        compare_idx = idx + 1 if idx + 1 < len(all_pages) else idx - 1
+        compare_idx = idx if idx < len(all_pages) else idx - 2
         compare_text_path = layout.page_text_path(
             all_pages[compare_idx].page_number
         )
@@ -261,20 +202,15 @@ def run_extraction_loop(
 
     extract_text = ""
     format_md = ""
-    summary_out = summary
-    summarize_t: object | None = None
     reflection_attempts = 0
     penalty_prompt = ""
 
     while True:
-        crew, extract_t, format_t, summarize_t = _build_crew(
+        crew, extract_t, format_t = _build_crew(
             extractor=extractor,
             formatter=formatter,
-            summarizer=summarizer,
             prepared=prepared,
             text_hint_str=text_hint_str,
-            summary=summary,
-            max_summary_chars=max_summary_chars,
             penalty_prompt=penalty_prompt,
             available_images=available_images,
         )
@@ -307,14 +243,12 @@ def run_extraction_loop(
                 page_number=page.page_number,
                 page_started=prepared.page_started,
                 artifacts=artifacts,
-                summary=summary,
                 completion_label="validation-fallback",
             )
             return ExtractionOutcome(
                 succeeded=False, fell_back=True,
                 page_result=result,
                 extract_text="", format_md="",
-                summary_out=summary, summarize_t=None,
             )
         except BaseException as exc:  # noqa: BLE001 — see runner/AGENTS.md
             if not fallback_to_text or not is_transient(exc):
@@ -329,14 +263,12 @@ def run_extraction_loop(
                 page_number=page.page_number,
                 page_started=prepared.page_started,
                 artifacts=artifacts,
-                summary=summary,
                 completion_label="fallback",
             )
             return ExtractionOutcome(
                 succeeded=False, fell_back=True,
                 page_result=result,
                 extract_text="", format_md="",
-                summary_out=summary, summarize_t=None,
             )
 
         extract_text = _output(extract_t)
@@ -352,16 +284,10 @@ def run_extraction_loop(
             break
         reflection_attempts += 1
 
-    if summarize_t is not None:
-        summary_out = _output(summarize_t)
-        if len(summary_out) > max_summary_chars:
-            summary_out = _runner._truncate_summary(summary_out, max_summary_chars)
-
     return ExtractionOutcome(
         succeeded=True, fell_back=False,
         page_result=None,
         extract_text=extract_text, format_md=format_md,
-        summary_out=summary_out, summarize_t=summarize_t,
     )
 
 

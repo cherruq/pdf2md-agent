@@ -1,22 +1,13 @@
-"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs, running summary.
+"""Per-PDF intermediate-file cache: PNG pages, native text, and per-page outputs.
 
-The cache layer is split into three cohesive concerns:
-
+The cache layer provides:
 * **Filesystem primitives** (:func:`atomic_write_text`) — sibling-tempfile
   + ``os.replace`` so a crash mid-write leaves the original file intact.
-  Both ``meta.json`` writes and the CLI's final output write go through
-  this seam.
 * **Layout** (:class:`CacheLayout`, :class:`PageArtifacts`,
   :func:`is_page_complete`, :func:`has_cached_extract`) — the on-disk
-  paths and their trust-cache gates. ``has_cached_extract`` rejects both
-  empty extracts (H1 sentinel) and the ``FALLBACK_SENTINEL`` marker
-  written by the text-layer fallback.
+  paths and their trust-cache gates.
 * **JSON state** (:func:`read_meta`, :func:`write_meta`,
-  :func:`check_meta_matches`, :func:`read_summary`, :func:`write_summary`)
-  — the two persisted state files (``meta.json`` fingerprint + the
-  running summary). Each reader is forgiving on missing input (returns a
-  safe default) but loud on malformed input (raises or returns mismatch
-  reasons).
+  :func:`check_meta_matches`) — lightweight validation of the PDF file path.
 """
 from __future__ import annotations
 
@@ -24,13 +15,12 @@ import json
 import logging
 import os
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, TYPE_CHECKING
 
-from pdf2md_agent.pdf_renderer import PageImage
-
+if TYPE_CHECKING:
+    from pdf2md_agent.pdf_renderer import PageImage
 
 log = logging.getLogger("pdf2md_agent.cache")
 
@@ -40,56 +30,18 @@ FALLBACK_SENTINEL: Final[str] = (
     "(vision model unavailable for page {page}; text-layer fallback emitted; "
     "treat as sentinel — no extractor payload available)\n"
 )
-"""Marker written into ``extract.txt`` by the text-layer fallback.
+"""Marker written into ``extract.txt`` by the text-layer fallback."""
 
-Two readers depend on the exact prefix string:
-
-* :func:`has_cached_extract` — refuses to trust an extract whose first
-  characters match ``"(vision model unavailable for page"`` so a
-  ``--no-cache-extract`` pass does not feed the marker text into the
-  formatter.
-* The fallback itself (:func:`pdf2md_agent.crew.fallback._record_text_layer_fallback`)
-  which writes ``FALLBACK_SENTINEL.format(page=N)`` to the extract
-  artifact so a follow-up run sees the sentinel and refuses to trust
-  the file.
-
-The prefix substring ``"(vision model unavailable for page"`` is also
-hard-coded in :func:`has_cached_extract` — they must stay in sync.
-"""
+class CacheCorruptedError(Exception):
+    """Raised when a cached file cannot be read or verified."""
 
 
 # --- Filesystem primitives ---------------------------------------------------
 
 
-class CacheCorruptedError(RuntimeError):
-    """Raised when a cache JSON file cannot be parsed or has the wrong shape.
-
-    The offending file is preserved alongside its original location as
-    ``<path>.corrupt-<unix-ts>`` so a human (or a follow-up re-run) can
-    inspect what was on disk before the cache rebuilds from scratch.
-    """
-
-
 def atomic_write_text(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` via a sibling temp file + ``os.replace``.
-
-    A crash mid-write leaves the original file (if any) intact instead of
-    producing a truncated output. The temp file uses a randomized suffix and
-    lives in the same directory as ``path`` so ``os.replace`` is atomic on
-    POSIX and Windows alike.
-
-    The temp file is opened with ``O_NOFOLLOW`` (when available) and mode
-    ``0o600`` so a pre-existing symlink at the temp path cannot redirect the
-    write to an attacker-controlled location.
-
-    Factored out of ``cli.py`` (D15-004/005) so both ``cache.py`` writes
-    and the CLI's final output write share the same security +
-    atomicity guarantees.
-    """
+    """Write ``content`` to ``path`` via a sibling temp file + ``os.replace``."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Reserve a unique name; the fd from mkstemp is closed immediately
-    # and we re-open with O_NOFOLLOW below so a symlink at tmp_name
-    # cannot redirect the write.
     _fd_unused, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
         suffix=".tmp",
@@ -139,7 +91,6 @@ class CacheLayout:
 
     root: Path
     pages_dir: Path
-    summary_path: Path
     meta_path: Path
 
     @classmethod
@@ -150,7 +101,6 @@ class CacheLayout:
         return cls(
             root=root,
             pages_dir=pages,
-            summary_path=root / "summary.json",
             meta_path=root / "meta.json",
         )
 
@@ -179,68 +129,18 @@ class CacheLayout:
 # --- JSON state: meta fingerprint ------------------------------------------
 
 
-def _backup_corrupt_file(path: Path) -> Path | None:
-    """Move ``path`` aside as ``<path>.corrupt-<unix-ts>`` and return the new path.
-
-    Returns ``None`` if the source path doesn't exist (no-op) or if the
-    rename itself failed — a backup is best-effort; the caller still
-    raises :class:`CacheCorruptedError` so the rest of the recovery can
-    proceed.
-    """
-    if not path.exists():
-        return None
-    backup = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
-    try:
-        os.replace(path, backup)
-    except OSError as exc:
-        log.warning(
-            "could not back up corrupt cache file %s -> %s: %s",
-            path, backup, exc,
-        )
-        return None
-    return backup
-
-
 def write_meta(
     meta_path: Path,
     *,
     pdf: Path,
-    dpi: int,
-    with_summary: bool,
-    pages: list[int] | None = None,
-    model: str,
-    persona_version: str,
+    **_kwargs: Any,
 ) -> None:
-    """Serialize run metadata to ``meta_path`` atomically.
-
-    The 6-field schema is the fingerprint a follow-up run validates against
-    via :func:`read_meta` + :func:`check_meta_matches`. Drift in any field
-    means the cached outputs no longer correspond to the current pipeline
-    configuration, so the runner fails loud instead of silently re-using
-    stale data.
-
-    ``pdf`` is canonicalized via :meth:`Path.resolve` before serialization
-    so the on-disk fingerprint is always a stable realpath. Otherwise a
-    follow-up run invoked from a different working directory (or with a
-    different relative-path spelling of the same file) would see the cached
-    value drift away from the current run's value purely due to path
-    formatting, even though the underlying file is identical.
-
-    Symlinks are followed by :meth:`Path.resolve`; a symlink PDF and its
-    real-path target therefore canonicalize to the same stored value.
-    """
+    """Serialize run metadata (PDF path) to ``meta_path`` atomically."""
     canonical_pdf = pdf.resolve()
     atomic_write_text(
         meta_path,
         json.dumps(
-            {
-                "pdf": str(canonical_pdf),
-                "dpi": dpi,
-                "with_summary": with_summary,
-                "pages": pages,
-                "model": model,
-                "persona_version": persona_version,
-            },
+            {"pdf": str(canonical_pdf)},
             indent=2,
             ensure_ascii=False,
         ),
@@ -249,42 +149,16 @@ def write_meta(
 
 @dataclass(frozen=True, slots=True)
 class MetaInfo:
-    """The on-disk ``meta.json`` payload, parsed and frozen.
-
-    Holding the fingerprint in a typed record keeps the match-check pure:
-    the runner never re-parses JSON inside the hot loop, and tests can
-    construct expected ``MetaInfo`` values without touching disk.
-    """
+    """The on-disk ``meta.json`` payload, parsed and frozen."""
 
     pdf: str
-    dpi: int
-    with_summary: bool
-    pages: tuple[int, ...] | None
-    model: str
-    persona_version: str
 
 
-_META_REQUIRED_FIELDS: Final[tuple[str, ...]] = (
-    "pdf",
-    "dpi",
-    "with_summary",
-    "pages",
-    "model",
-    "persona_version",
-)
+_META_REQUIRED_FIELDS: Final[tuple[str, ...]] = ("pdf",)
 
 
 def read_meta(meta_path: Path) -> MetaInfo | None:
-    """Return the parsed ``MetaInfo`` or ``None`` for missing/malformed input.
-
-    Missing files, unreadable files, non-object JSON, or missing required
-    fields all return ``None`` — the caller decides whether to fail loud
-    (a follow-up run) or rebuild silently (the initial run). The corruption
-    that ``read_summary`` guards against (silent loss of cross-page context)
-    does not apply here: the fingerprint either matches or it doesn't, and
-    a missing/malformed ``meta.json`` is a safe signal to rebuild from
-    scratch.
-    """
+    """Return the parsed ``MetaInfo`` or ``None`` for missing/malformed input."""
     if not meta_path.exists():
         return None
     try:
@@ -297,136 +171,22 @@ def read_meta(meta_path: Path) -> MetaInfo | None:
         return None
     if not isinstance(payload["pdf"], str):
         return None
-    if not isinstance(payload["dpi"], int):
-        return None
-    if not isinstance(payload["with_summary"], bool):
-        return None
-    pages_raw = payload["pages"]
-    if pages_raw is not None:
-        if not isinstance(pages_raw, list) or not all(
-            isinstance(p, int) for p in pages_raw
-        ):
-            return None
-    if not isinstance(payload["model"], str):
-        return None
-    if not isinstance(payload["persona_version"], str):
-        return None
-    return MetaInfo(
-        pdf=payload["pdf"],
-        dpi=payload["dpi"],
-        with_summary=payload["with_summary"],
-        pages=tuple(pages_raw) if pages_raw is not None else None,
-        model=payload["model"],
-        persona_version=payload["persona_version"],
-    )
+    return MetaInfo(pdf=payload["pdf"])
 
 
 def check_meta_matches(
     stored: MetaInfo,
     *,
     pdf: str,
-    dpi: int,
-    with_summary: bool,
-    pages: list[int] | None,
-    model: str,
-    persona_version: str,
+    **_kwargs: Any,
 ) -> list[str]:
-    """Return a list of human-readable mismatch reasons; empty list == match.
-
-    The runner surfaces each reason in the validation error so a user
-    knows exactly which fingerprint field drifted. Page lists are compared
-    as sets (order-invariant) — :func:`resolve_pages` may emit pages in
-    user-supplied order, but the on-disk schema records the sorted, deduped
-    set.
-    """
+    """Return a list of human-readable mismatch reasons; empty list == match."""
     reasons: list[str] = []
     if stored.pdf != pdf:
         reasons.append(
             f"pdf changed: cached={stored.pdf!r}, current={pdf!r}"
         )
-    if stored.dpi != dpi:
-        reasons.append(
-            f"dpi changed: cached={stored.dpi}, current={dpi}"
-        )
-    if stored.with_summary != with_summary:
-        reasons.append(
-            f"with_summary changed: cached={stored.with_summary}, "
-            f"current={with_summary}"
-        )
-    stored_pages = set(stored.pages) if stored.pages is not None else None
-    current_pages = set(pages) if pages is not None else None
-    if stored_pages != current_pages:
-        reasons.append(
-            f"pages changed: cached={sorted(stored_pages) if stored_pages is not None else None}, "
-            f"current={sorted(current_pages) if current_pages is not None else None}"
-        )
-    if stored.model != model:
-        reasons.append(
-            f"model changed: cached={stored.model!r}, current={model!r}"
-        )
-    if stored.persona_version != persona_version:
-        reasons.append(
-            f"persona_version changed: cached={stored.persona_version!r}, "
-            f"current={persona_version!r}"
-        )
     return reasons
-
-
-# --- JSON state: running summary -------------------------------------------
-
-
-def read_summary(path: Path) -> str:
-    """Read the running-summary payload from ``path``.
-
-    Raises :class:`CacheCorruptedError` if the file exists but cannot be
-    parsed as a JSON object — losing the running summary would silently
-    drop cross-page context, so the corruption must surface (D6-008).
-    On corruption the offending file is moved aside as
-    ``<path>.corrupt-<unix-ts>`` so a follow-up re-run (or a human) can
-    inspect it.
-
-    A missing file still returns ``""`` — that is the legitimate "first
-    run" state, not corruption.
-    """
-    if not path.exists():
-        return ""
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        backup = _backup_corrupt_file(path)
-        log.warning(
-            "read_summary: %s is unreadable (%s); backed up to %s and raising",
-            path, exc, backup if backup else "<backup failed>",
-        )
-        raise CacheCorruptedError(
-            f"{path} is unreadable ({exc}); backed up to {backup}"
-        ) from exc
-    if not isinstance(payload, dict):
-        backup = _backup_corrupt_file(path)
-        log.warning(
-            "read_summary: %s is not a JSON object; backed up to %s and raising",
-            path, backup if backup else "<backup failed>",
-        )
-        raise CacheCorruptedError(
-            f"{path} is not a JSON object; backed up to {backup}"
-        )
-    return str(payload.get("summary", ""))
-
-
-def write_summary(path: Path, summary: str) -> None:
-    """Serialize the running summary to ``path`` atomically.
-
-    Logs + re-raises any failure so the caller surfaces the error
-    instead of silently dropping the cross-page context. The temp file
-    is cleaned up by :func:`atomic_write_text` itself on the error
-    path.
-    """
-    payload = json.dumps({"summary": summary}, indent=2, ensure_ascii=False)
-    try:
-        atomic_write_text(path, payload)
-    except OSError as exc:
-        log.error("write_summary: failed to write %s: %s", path, exc)
-        raise
 
 
 # --- Trust-cache gates ------------------------------------------------------
@@ -442,35 +202,13 @@ def is_page_complete(layout: CacheLayout, page_number: int) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class CacheNoCacheFlags:
-    """Per-resource opt-out switches for the no-cache flag family.
-
-    Default semantics: trust cached output (every flag ``False``). Setting a
-    flag to ``True`` invalidates the corresponding cache resource for the
-    duration of the run — the runner treats the resource as missing and
-    rebuilds it from scratch.
-
-    * ``render`` — skip the per-page PNG render when one already exists at
-      the configured DPI. Setting it forces a re-render.
-    * ``text`` — skip the per-page ``_text.txt`` re-emit when the cache
-      file exists.
-    * ``resized`` — skip the downscaled JPEG re-resize when the cache file
-      already matches the budgeted ``long_side``.
-    * ``extract`` — don't trust the cached ``extract.txt``; re-run the
-      extractor (downstream format/summarize still trust their own cache
-      unless those flags are set too).
-    * ``format`` — don't trust the cached ``format.md``; re-run the
-      formatter. Short-circuits the entire per-page pipeline if the
-      cached markdown is unavailable.
-    * ``summary`` — don't trust ``summary.json``; start the running
-      summary fresh (no per-page pre-seed).
-    """
+    """Per-resource opt-out switches for the no-cache flag family."""
 
     render: bool = False
     text: bool = False
     resized: bool = False
     extract: bool = False
     format: bool = False
-    summary: bool = False
 
     def as_dict(self) -> dict[str, bool]:
         return {
@@ -479,17 +217,9 @@ class CacheNoCacheFlags:
             "resized": self.resized,
             "extract": self.extract,
             "format": self.format,
-            "summary": self.summary,
         }
 
     def all(self) -> bool:
-        """True iff every per-resource flag is True (i.e. ``--no-cache-all``).
-
-        ``--no-cache-all`` opts every cache resource out, which means
-        downstream code can also discard stale derived state (such as
-        ``meta.json``'s recorded fingerprint) rather than refusing the
-        run on a drift that's about to be regenerated anyway.
-        """
         return all(self.as_dict().values())
 
 
@@ -497,19 +227,6 @@ _FALLBACK_SENTINEL_PREFIX: Final[str] = "(vision model unavailable for page"
 
 
 def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
-    """True if a cached ``page_NNNN_extract.txt`` exists for this page
-    AND its content is a real extractor payload (not a fallback sentinel).
-
-    Two sentinel shapes must be rejected:
-
-    * Zero-byte file — legacy H1 sentinel: vision model failed and the
-      runner wrote an empty placeholder. Trusting it would propagate
-      empty markdown into the formatter.
-    * Non-empty fallback marker — the runner writes
-      :data:`FALLBACK_SENTINEL` on text-layer fallback; trusting that as
-      a real extract would feed the sentinel text into the
-      ``--no-cache-extract`` formatter pass.
-    """
     path = layout.page_extract_path(page_number)
     if not (path.is_file() and path.stat().st_size > 0):
         return False
@@ -531,7 +248,5 @@ __all__ = [
     "has_cached_extract",
     "is_page_complete",
     "read_meta",
-    "read_summary",
     "write_meta",
-    "write_summary",
 ]

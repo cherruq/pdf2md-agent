@@ -38,7 +38,6 @@ def _make_layout(tmp_path: Path, page_number: int, text: str) -> CacheLayout:
     return CacheLayout(
         root=tmp_path,
         pages_dir=pages_dir,
-        summary_path=tmp_path / "summary.json",
         meta_path=tmp_path / "meta.json",
     )
 
@@ -65,14 +64,11 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
 
     extract_t = _FakeTask()
     format_t = _FakeTask()
-    summarize_t = _FakeTask()
 
     with patch.object(runner, "make_extractor"), \
          patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_summarizer"), \
          patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task", return_value=summarize_t):
+         patch.object(runner, "make_format_task", return_value=format_t):
         def _always_timeout() -> None:
             raise APITimeoutError(request=httpx.Request("GET", "https://example.test"))
 
@@ -273,13 +269,10 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
     )
     extract_t = _FakeTask(raw="extracted markdown")
     format_t = _FakeTask(raw=commonmark_payload)
-    summarize_t = _FakeTask(raw="running summary")
 
     with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_summarizer"), \
          patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task", return_value=summarize_t):
+         patch.object(runner, "make_format_task", return_value=format_t):
         with patch.object(runner, "make_formatter") as mk:
             with patch.object(runner, "Crew") as crew_cls:
                 crew_cls.return_value.kickoff = lambda: None
