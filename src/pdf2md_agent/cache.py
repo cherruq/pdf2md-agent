@@ -1,13 +1,22 @@
-"""Per-PDF intermediate-file cache: PNG pages, native text, and per-page outputs.
+"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs, running summary.
 
-The cache layer provides:
+The cache layer is split into three cohesive concerns:
+
 * **Filesystem primitives** (:func:`atomic_write_text`) — sibling-tempfile
   + ``os.replace`` so a crash mid-write leaves the original file intact.
+  Both ``meta.json`` writes and the CLI's final output write go through
+  this seam.
 * **Layout** (:class:`CacheLayout`, :class:`PageArtifacts`,
   :func:`is_page_complete`, :func:`has_cached_extract`) — the on-disk
-  paths and their trust-cache gates.
+  paths and their trust-cache gates. ``has_cached_extract`` rejects both
+  empty extracts (H1 sentinel) and the ``FALLBACK_SENTINEL`` marker
+  written by the text-layer fallback.
 * **JSON state** (:func:`read_meta`, :func:`write_meta`,
-  :func:`check_meta_matches`) — lightweight validation of the PDF file path.
+  :func:`check_meta_matches`, :func:`read_summary`, :func:`write_summary`)
+  — the two persisted state files (``meta.json`` fingerprint + the
+  running summary). Each reader is forgiving on missing input (returns a
+  safe default) but loud on malformed input (raises or returns mismatch
+  reasons).
 """
 from __future__ import annotations
 
@@ -149,7 +158,12 @@ def write_meta(
 
 @dataclass(frozen=True, slots=True)
 class MetaInfo:
-    """The on-disk ``meta.json`` payload, parsed and frozen."""
+    """The on-disk ``meta.json`` payload, parsed and frozen.
+
+    Holding the fingerprint in a typed record keeps the match-check pure:
+    the runner never re-parses JSON inside the hot loop, and tests can
+    construct expected ``MetaInfo`` values without touching disk.
+    """
 
     pdf: str
 
@@ -158,7 +172,14 @@ _META_REQUIRED_FIELDS: Final[tuple[str, ...]] = ("pdf",)
 
 
 def read_meta(meta_path: Path) -> MetaInfo | None:
-    """Return the parsed ``MetaInfo`` or ``None`` for missing/malformed input."""
+    """Return the parsed ``MetaInfo`` or ``None`` for missing/malformed input.
+
+    Missing files, unreadable files, non-object JSON, or missing required
+    fields all return ``None`` — the caller decides whether to fail loud
+    (a follow-up run) or rebuild silently (the initial run). The fingerprint
+    either matches or it doesn't, and a missing/malformed ``meta.json`` is
+    a safe signal to rebuild from scratch.
+    """
     if not meta_path.exists():
         return None
     try:
@@ -180,7 +201,11 @@ def check_meta_matches(
     pdf: str,
     **_kwargs: Any,
 ) -> list[str]:
-    """Return a list of human-readable mismatch reasons; empty list == match."""
+    """Return a list of human-readable mismatch reasons; empty list == match.
+
+    The runner surfaces each reason in the validation error so a user
+    knows exactly which fingerprint field drifted.
+    """
     reasons: list[str] = []
     if stored.pdf != pdf:
         reasons.append(
@@ -202,7 +227,17 @@ def is_page_complete(layout: CacheLayout, page_number: int) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class CacheNoCacheFlags:
-    """Per-resource opt-out switches for the no-cache flag family."""
+    """Per-resource opt-out switches for the no-cache flag family.
+
+    Default semantics: trust cached output (every flag ``False``). Setting a
+    flag to ``True`` invalidates the corresponding cache resource for the
+    duration of the run — the runner treats the resource as missing and
+    rebuilds it from scratch.
+
+    * ``render`` — skip the per-page PNG render when one already exists
+    * ``extract`` — bypass the vision LLM when ``extract.txt`` exists
+    * ``format`` — bypass the formatting LLM when ``format.md`` exists
+    """
 
     render: bool = False
     text: bool = False
@@ -211,6 +246,7 @@ class CacheNoCacheFlags:
     format: bool = False
 
     def as_dict(self) -> dict[str, bool]:
+        """Return a dict of the underlying flags."""
         return {
             "render": self.render,
             "text": self.text,
@@ -227,6 +263,7 @@ _FALLBACK_SENTINEL_PREFIX: Final[str] = "(vision model unavailable for page"
 
 
 def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
+    """True if a cached ``page_NNNN_extract.txt`` exists for this page."""
     path = layout.page_extract_path(page_number)
     if not (path.is_file() and path.stat().st_size > 0):
         return False

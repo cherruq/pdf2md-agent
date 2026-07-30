@@ -17,7 +17,12 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 
 def _text_layer_fallback(artifacts: PageArtifacts) -> str:
-    """Build a best-effort markdown page from the PDF's native text layer."""
+    """Build a best-effort markdown page from the PDF's native text layer.
+
+    Used when the vision model is unreachable after all retries. The page's
+    PNG is dropped from the output (we can't describe it) and the text is
+    emitted verbatim in a fenced block so reviewers can spot drift.
+    """
     text = artifacts.page_text.read_text(encoding="utf-8").strip()
     if not text:
         return (
@@ -35,7 +40,11 @@ def _text_layer_fallback(artifacts: PageArtifacts) -> str:
 
 @dataclass(frozen=True, slots=True)
 class FallbackRecord:
-    """Arguments bundled for :func:`_record_text_layer_fallback`."""
+    """Arguments bundled for :func:`_record_text_layer_fallback`.
+
+    Bundling the fields keeps the call sites readable; the runner
+    threads one of these through to the helper on every fallback path.
+    """
 
     idx: int
     total: int
@@ -55,7 +64,17 @@ def _record_text_layer_fallback(
     completion_label: str,
     **_kwargs: object,
 ) -> PageResult:
-    """Write the fallback artifacts for one page and return its :class:`PageResult`."""
+    """Write the fallback artifacts for one page and return its :class:`PageResult`.
+
+    Keyword arguments keep the call site readable and match the historical
+    signature tests rely on (``patch.object(runner, "_record_text_layer_fallback")``
+    + ``runner._record_text_layer_fallback(idx=..., ...)``).
+
+    Writes the fallback markdown to ``format.md`` and a sentinel into
+    ``extract.txt`` so a follow-up ``--no-cache-extract`` run refuses to
+    trust the sentinel as a real extractor payload (see
+    :func:`pdf2md_agent.cache.has_cached_extract`).
+    """
     record = FallbackRecord(
         idx=idx,
         total=total,

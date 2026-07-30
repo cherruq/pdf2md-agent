@@ -256,6 +256,12 @@ def _run_pipeline(
                 existing_meta,
                 pdf=str(args.pdf.resolve()),
             )
+            # ``pages`` is informational only: per-page outputs are
+            # reused via file-existence checks (``is_page_complete`` /
+            # ``maybe_skip_render``), so a wider cached page set is
+            # always safe to reuse. Only the missing pages get
+            # processed. All other fingerprint fields indicate real
+            # stale-output risk and must hard-fail.
             if reasons:
                 for r in reasons:
                     print(f"error: cache invalid: {r}", file=sys.stderr)

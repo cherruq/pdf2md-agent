@@ -35,8 +35,14 @@ _VERBATIM_RULE = (
     "and page numbers, but MUST preserve document titles and headings."
 )
 
+# Joined rule text shared by every task that asks the LLM to write verbatim
+# Markdown: the formatter factory (and its file-fed sibling) and the
+# extractor's task description. The ``chr(60)/chr(62)`` escape around
+# ``<think>`` is load-bearing (see AGENTS.md → crew/ → CONVENTIONS); do not
+# "refactor" to a literal tag.
 _COMMON_TASK_RULES: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
 
+# Joined rule text consumed by the token-budget planner.
 TASKS_RULES_TEXT: str = _COMMON_TASK_RULES
 
 
@@ -94,7 +100,13 @@ def build_extract_description(
     tile_paths: list[Path] | None = None,
     **kwargs: Any,
 ) -> str:
-    """Build the exact description string the extract task sends to the LLM."""
+    """Build the exact description string the extract task sends to the LLM.
+
+    Shared between ``make_extract_task`` (which wraps it in a CrewAI Task)
+    and the runner's token-budget planner (which needs to estimate the cost
+    of the same prompt), guaranteeing the budget never diverges from the
+    real payload.
+    """
     return (
         f"{_text_hint_block(text_hint)}"
         f"{extract_task_intro(page_path, available_images, is_tiled, tile_paths)}"
@@ -149,7 +161,18 @@ def make_format_task_from_extract_file(
     formatter: Agent,
     extract_path: Path,
 ) -> Task:
-    """Format task fed from a cached ``page_NNNN_extract.txt`` on disk."""
+    """Format task fed from a cached ``page_NNNN_extract.txt`` on disk.
+
+    Used when the runner trusts the cached extract (the ``--no-cache-extract``
+    flag is unset) but still wants a fresh formatter pass — typically a
+    resume-after-failure retry, or a manual re-run where only the formatter
+    has changed. The file's full text is pasted into the description as a
+    fenced block, matching the ``_text_hint_block`` seam so the runner has
+    no new tool surface to maintain.
+
+    Caller is responsible for ensuring the file exists (gate on
+    ``cache.has_cached_extract`` first).
+    """
     text = extract_path.read_text(encoding="utf-8")
     return Task(
         description=(

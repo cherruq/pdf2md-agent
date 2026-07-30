@@ -139,10 +139,20 @@ def run_pipeline(
     assets_dir: Any = None,
     **_kwargs: object,
 ) -> list[PageResult]:
-    """Run the per-page CrewAI pipeline across ``pages`` and return page results."""
+    """Run the per-page CrewAI pipeline across ``pages`` and return page results.
+
+    See module docstring for the three short-circuit paths. ``text_hint``
+    controls whether the native PDF text layer is fed to the extractor.
+    ``retry_config`` controls transient-error retry around each page's
+    ``crew.kickoff()`` call. ``ctx_limit`` of 0 means "resolve at runtime"
+    via :func:`pdf2md_agent.config.resolve_ctx_limit`.
+    """
     if ctx_limit <= 0:
         ctx_limit = resolve_ctx_limit()
 
+    # Lazy import to keep the runner ↔ extraction import order acyclic.
+    # extraction.py looks up make_extractor / make_formatter / Crew via
+    # this module so tests can patch them at ``pdf2md_agent.crew.runner.*``.
     from pdf2md_agent.crew.extraction import run_extraction_loop
 
     patch_add_image_tool(
@@ -164,6 +174,7 @@ def run_pipeline(
     for idx, page in enumerate(pages, start=1):
         artifacts = layout.artifacts_for(page)
 
+        # Short-circuit 1: format.md + extract.txt both cached → trust.
         if not no_cache.format and is_page_complete(layout, page.page_number):
             cached_md = artifacts.format_markdown.read_text(encoding="utf-8").strip()
             log.info(
@@ -173,6 +184,8 @@ def run_pipeline(
             results.append(PageResult(page.page_number, cached_md))
             continue
 
+        # Short-circuit 2: --no-cache-extract with cached extract →
+        # re-format only, no vision call.
         if (
             no_cache.extract
             and not no_cache.format
@@ -206,6 +219,7 @@ def run_pipeline(
                 idx, total, page.page_number,
             )
 
+        # Full pipeline path.
         text_hint_str = (
             artifacts.page_text.read_text(encoding="utf-8") if text_hint else ""
         )
@@ -268,21 +282,22 @@ def run_pipeline(
 
 
 __all__ = [
-    "Crew",
-    "PageImage",
-    "PageResult",
-    "_FALLBACK_SENTINEL",
-    "_output",
-    "_record_text_layer_fallback",
-    "_resize_page_png",
-    "_strip_think",
-    "_text_layer_fallback",
-    "make_extractor",
-    "make_extract_task",
-    "make_format_task",
-    "make_format_task_from_extract_file",
-    "make_formatter",
-    "make_vision_llm",
-    "render_pdf",
+    "Crew",  # re-exported from crewai (test patch surface)
+    "PageImage",  # re-exported from pdf_renderer
+    "PageResult",  # re-exported from pdf2md_agent.crew.results
+    "_FALLBACK_SENTINEL",  # legacy alias: tests import this name from runner
+    "_output",  # re-exported from pdf2md_agent.crew.output
+    "_record_text_layer_fallback",  # re-exported from pdf2md_agent.crew.fallback
+    "_resize_page_png",  # re-exported from pdf2md_agent.crew.page_image
+    "_strip_think",  # re-exported from pdf2md_agent.crew.output
+    "_text_layer_fallback",  # re-exported from pdf2md_agent.crew.fallback
+    "make_extractor",  # re-exported from pdf2md_agent.crew.agents
+    "make_extract_task",  # re-exported from pdf2md_agent.crew.tasks
+    "make_format_task",  # re-exported from pdf2md_agent.crew.tasks
+    "make_format_task_from_extract_file",  # re-exported from pdf2md_agent.crew.tasks
+    "make_formatter",  # re-exported from pdf2md_agent.crew.agents
+    "make_vision_llm",  # re-exported from vision
+    "render_pdf",  # re-exported from pdf2md_agent.pdf_renderer
     "run_pipeline",
+
 ]

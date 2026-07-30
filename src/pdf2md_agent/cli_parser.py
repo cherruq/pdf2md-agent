@@ -331,8 +331,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Total LLM call attempts per page (initial + retries). Pass 0 "
-            "or omit to retry transient failures indefinitely. Overrides "
-            "PDF2MD_AGENT_MAX_RETRIES. Default: 0 (unlimited)."
+            "or omit to retry transient failures indefinitely. Default: 0 "
+            "(unlimited)."
         ),
     )
     tuning.add_argument(
@@ -341,8 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PX",
         help=(
-            "Long-side cap (pixels) for inlined page images. Overrides "
-            "PDF2MD_AGENT_IMAGE_LONG_SIDE. Default: 1536."
+            "Long-side cap (pixels) for inlined page images. Default: 1536."
         ),
     )
     tuning.add_argument(
@@ -352,7 +351,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="Q",
         help=(
             "JPEG quality (1-100) used when downsampling page images. "
-            "Overrides PDF2MD_AGENT_IMAGE_JPEG_QUALITY. Default: 85."
+            "Default: 85."
         ),
     )
     tuning.add_argument(
@@ -360,10 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int_type("ctx-limit", 256),
         default=None,
         metavar="TOK",
-        help=(
-            "Model context-window token limit the runner budgets against. "
-            "Overrides PDF2MD_AGENT_CTX_LIMIT."
-        ),
+        help="Model context-window token limit the runner budgets against.",
     )
     tuning.add_argument(
         "--request-timeout",
@@ -371,8 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SEC",
         help=(
-            "Per-attempt wall-clock timeout (seconds, 0.1-600). Overrides "
-            "PDF2MD_AGENT_REQUEST_TIMEOUT. Default: 60.0."
+            "Per-attempt wall-clock timeout (seconds, 0.1-600). "
+            "Default: 60.0."
         ),
     )
 
