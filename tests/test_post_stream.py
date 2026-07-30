@@ -13,7 +13,12 @@ from __future__ import annotations
 import re
 
 from pdf2md_agent.crew.runner import PageResult
-from pdf2md_agent.post_stream import StitchMode, stitch_pages, StreamingStitcher
+from pdf2md_agent.post_stream import (
+    StitchMode,
+    StreamingStitcher,
+    step3_stitch_and_clean,
+    stitch_pages,
+)
 
 
 # ---------- helpers ----------------------------------------------------------
@@ -371,3 +376,23 @@ def test_cross_page_table_join_with_trailing_blocks() -> None:
     assert "| 3 | 4 |" in out
     # The trailing paragraph must also be present.
     assert "A regular paragraph after the table." in out
+
+
+def test_step3_cleans_headers_footers_and_page_numbers() -> None:
+    """Step 3 must remove repeating running headers/footers and standalone page numbers."""
+    p1 = (
+        "CONFIDENTIAL - Internal Use Only\n\n"
+        "This is the first page content.\n\n"
+        "- 1 -"
+    )
+    p2 = (
+        "CONFIDENTIAL - Internal Use Only\n\n"
+        "This is the second page content.\n\n"
+        "Page 2"
+    )
+    out = step3_stitch_and_clean([_page(1, p1), _page(2, p2)])
+    assert "CONFIDENTIAL - Internal Use Only" not in out
+    assert "- 1 -" not in out
+    assert "Page 2" not in out
+    assert "This is the first page content." in out
+    assert "This is the second page content." in out

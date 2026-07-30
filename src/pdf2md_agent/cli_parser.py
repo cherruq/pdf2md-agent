@@ -1,40 +1,16 @@
-"""argparse builder + CLI argument post-processing.
-
-Two responsibilities live here:
-
-* :func:`build_parser` — the :class:`argparse.ArgumentParser` definition
-  for the ``pdf2md-agent`` CLI. Argument groups (Pipeline / Cache
-  control / Feature disable / Retry & tuning / Diagnostic) are surfaced
-  in ``--help`` so users can discover flags without reading the README.
-* Post-parse resolution helpers (:func:`_resolve_no_cache_flags`,
-  :func:`_resolve_layout`, :func:`build_retry_config`) — pure functions
-  that turn a parsed :class:`argparse.Namespace` into the typed value
-  objects the runtime expects (:class:`CacheNoCacheFlags`,
-  :class:`CacheLayout`, :class:`RetryConfig`).
-
-Validation helpers (``_request_timeout_type``, ``_positive_int_type``,
-``_safe_intermediates_dir``) live at module scope; the cache-key /
-safe-stem helpers moved to :mod:`pdf2md_agent.filesystem_safety`.
-"""
+"""argparse builder and CLI argument post-processing."""
 from __future__ import annotations
 
 import argparse
-import tempfile
 from pathlib import Path
 from typing import Callable
 
-from pdf2md_agent import __about__
+from pdf2md_agent import __version__
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
-from pdf2md_agent.filesystem_safety import cache_key_for_pdf, safe_cache_stem
+from pdf2md_agent.filesystem_safety import cache_key_for_pdf
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec
 from pdf2md_agent.post_stream import StitchMode
-
-
-# Legacy aliases: tests import these names from cli_parser.
-_cache_key_for_pdf = cache_key_for_pdf
-_safe_cache_stem = safe_cache_stem
-
 
 _NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
     "render",
@@ -56,16 +32,12 @@ class _VersionAction(argparse.Action):
         values: object,
         option_string: str | None,
     ) -> None:
-        print(f"pdf2md-agent {__about__.__version__}")
+        print(f"pdf2md-agent {__version__}")
         parser.exit(0)
 
 
 class _NoCacheAllAction(argparse.Action):
-    """Sets every ``--no-cache-*`` flag to True when ``--no-cache-all`` is set.
-
-    Implemented as a custom ``Action`` so post-parse resolution happens
-    automatically regardless of argument order on the command line.
-    """
+    """Sets every ``--no-cache-*`` flag to True when ``--no-cache-all`` is set."""
 
     def __call__(
         self,
@@ -80,7 +52,6 @@ class _NoCacheAllAction(argparse.Action):
 
 
 def _request_timeout_type(raw: str) -> float:
-    """argparse ``type=`` for ``--request-timeout`` (0.1s–600s)."""
     try:
         value = float(raw)
     except ValueError as exc:
@@ -112,12 +83,7 @@ def _positive_int_type(name: str, minimum: int) -> Callable[[str], int]:
 
 
 def _safe_intermediates_dir(value: str) -> Path:
-    """argparse ``type=`` for ``--intermediates-dir``.
-
-    Rejects values that contain ``..`` path segments so a malicious or
-    mistaken flag cannot point the cache directory outside the working
-    tree (path-traversal guard, D11-N02).
-    """
+    """argparse validator for ``--intermediates-dir``, rejecting '..' segments."""
     p = Path(value)
     if any(part == ".." for part in p.parts):
         raise argparse.ArgumentTypeError(
@@ -130,11 +96,6 @@ def _safe_intermediates_dir(value: str) -> Path:
 
 
 def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
-    """Build a :class:`CacheNoCacheFlags` from CLI flags.
-
-    The ``--no-cache-all`` action already flips every per-resource flag,
-    so this is a straight attribute-to-field copy.
-    """
     return CacheNoCacheFlags(
         render=bool(args.no_cache_render),
         text=bool(args.no_cache_text),
@@ -147,43 +108,17 @@ def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
 def _resolve_layout(
     pdf: Path,
     override: Path | None,
-    keep_intermediates: bool,
 ) -> tuple[CacheLayout, Path]:
-    """Return ``(layout, render_target_pages_dir)``.
-
-    When ``keep_intermediates`` is False the layout lives under a tempdir
-    that is removed on context exit.
-    """
-    if keep_intermediates:
-        root = (
-            override
-            if override is not None
-            else Path(".pdf2md-agent-cache") / cache_key_for_pdf(pdf)
-        )
-        return CacheLayout.for_pdf(root, pdf), root / "pages"
-
-    td = Path(tempfile.mkdtemp(prefix="pdf2md_agent_"))
-    pages = td / "pages"
-    pages.mkdir()
-    return (
-        CacheLayout(
-            root=td,
-            pages_dir=pages,
-            meta_path=td / "meta.json",
-        ),
-        pages,
+    root = (
+        override
+        if override is not None
+        else Path(".pdf2md-agent-cache") / cache_key_for_pdf(pdf)
     )
+    return CacheLayout.for_pdf(root, pdf), root / "pages"
 
 
 def build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
-    """Build a :class:`RetryConfig` from CLI args (override) + env (fallback).
-
-    Returns ``None`` on invalid input so the caller can print a
-    user-facing error and exit non-zero. ``--max-retries 0`` (or env
-    ``PDF2MD_AGENT_MAX_RETRIES=0``) means "unlimited" and is normalized
-    to ``RetryConfig.max_attempts=None``.
-    """
-    # Defer the env-fallback imports to keep this module's top light.
+    """Build a :class:`RetryConfig` from CLI args (override) + env (fallback)."""
     from pdf2md_agent.config import (
         RETRY_INITIAL_DELAY,
         RETRY_JITTER,
@@ -269,11 +204,6 @@ def build_parser() -> argparse.ArgumentParser:
         "resource out; --no-cache-all opts every resource out.",
     )
     cache.add_argument(
-        "--no-intermediates",
-        action="store_true",
-        help="Skip writing intermediate cache files (uses a tempdir).",
-    )
-    cache.add_argument(
         "--intermediates-dir",
         type=_safe_intermediates_dir,
         default=None,
@@ -340,9 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int_type("image-long-side", 64),
         default=None,
         metavar="PX",
-        help=(
-            "Long-side cap (pixels) for inlined page images. Default: 1536."
-        ),
+        help="Long-side cap (pixels) for inlined page images. Default: 1536.",
     )
     tuning.add_argument(
         "--image-quality",
@@ -366,10 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_request_timeout_type,
         default=None,
         metavar="SEC",
-        help=(
-            "Per-attempt wall-clock timeout (seconds, 0.1-600). "
-            "Default: 60.0."
-        ),
+        help="Per-attempt wall-clock timeout (seconds, 0.1-600). Default: 60.0.",
     )
 
     parser.add_argument(
@@ -381,17 +306,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# Legacy aliases under the underscore-prefixed names tests still import.
-_safe_cache_stem = safe_cache_stem
-_cache_key_for_pdf = cache_key_for_pdf
-
-
 __all__ = [
     "_NO_CACHE_FLAG_NAMES",
-    "_cache_key_for_pdf",
     "_resolve_layout",
     "_resolve_no_cache_flags",
-    "_safe_cache_stem",
     "_safe_intermediates_dir",
     "build_parser",
     "build_retry_config",

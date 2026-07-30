@@ -9,7 +9,7 @@ dependencies = [
     # openai used transitively via crewai LLM provider
     "openai>=1.0,<2",
     "python-dotenv>=1.0,<2",
-    "Pillow>=10.0",  # image downscale / resize in multimodal_patch, runner, token_budget
+    "Pillow>=10.0",  # image downscale / resize in multimodal_patch, runner, image_budget
 ]
 
 [project.scripts]

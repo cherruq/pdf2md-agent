@@ -11,8 +11,8 @@ per-page helpers, and a load-bearing monkey-patch on CrewAI's
 | `__init__.py` | empty marker | |
 | `agents.py` | 2 personas + agent factories | `make_extractor`, `make_formatter` |
 | `tasks.py` | crewAI task builders + `patch_add_image_tool()` call | `make_extract_task`, `make_format_task`, `make_format_task_from_extract_file` |
-| `runner.py` | per-page pipeline orchestrator | `run_pipeline`, `_run_format_only` |
-| `extraction.py` | per-page extract → format loop | `run_extraction_loop`, `_strip_multipage_headers_footers` |
+| `runner.py` | per-page pipeline orchestrator (Step 2) | `run_pipeline`, `step2_extract_pages`, `_process_single_page`, `_run_format_only` |
+| `extraction.py` | per-page extract → format loop | `run_extraction_loop` |
 | `page_image.py` | token-budget planning + downscale + tile splitting | `prepare_page_image`, `_resize_page_png`, `_make_tiles` |
 | `fallback.py` | text-layer fallback markdown + sentinel | `_text_layer_fallback`, `_record_text_layer_fallback`, `FallbackRecord` |
 | `output.py` | CrewAI output extraction + think-block stripping | `_output`, `_strip_think` |

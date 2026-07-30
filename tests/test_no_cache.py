@@ -8,6 +8,7 @@ import pytest
 
 from pdf2md_agent import cli
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags, has_cached_extract
+from pdf2md_agent.config import ConversionConfig
 from pdf2md_agent.crew import runner
 from pdf2md_agent.crew.runner import PageImage, run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
@@ -40,6 +41,28 @@ def _layout(tmp_path: Path, page_number: int) -> CacheLayout:
         root=tmp_path,
         pages_dir=pages_dir,
         meta_path=tmp_path / "meta.json",
+    )
+
+
+def _make_config(
+    layout: CacheLayout,
+    no_cache: CacheNoCacheFlags = CacheNoCacheFlags(),
+    retry_config: RetryConfig | None = None,
+) -> ConversionConfig:
+    return ConversionConfig(
+        pdf=Path("dummy.pdf"),
+        output=Path("out.md"),
+        dpi=144,
+        layout=layout,
+        render_target=Path("render"),
+        resolved_pages=None,
+        no_cache=no_cache,
+        retry_config=retry_config or RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
+        text_hint=False,
+        image_long_side=1536,
+        image_jpeg_quality=85,
+        ctx_limit=100000,
+        request_timeout_seconds=60.0,
     )
 
 
@@ -176,14 +199,8 @@ def test_no_cache_format_reruns_full_pipeline(
         crew_cls.return_value.kickoff = _track
         results = run_pipeline(
             pages=[page],
-            layout=layout,
-            no_cache=CacheNoCacheFlags(format=True),
-            text_hint=False,
+            config=_make_config(layout=layout, no_cache=CacheNoCacheFlags(format=True)),
             llm=object(),  # type: ignore[arg-type]
-            retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.001, jitter=0.0
-            ),
-            fallback_to_text=True,
         )
 
     assert calls, "full pipeline must run when --no-cache-format is set"
@@ -227,14 +244,8 @@ def test_no_cache_extract_runs_formatter_only(
          patch.object(runner, "Crew", return_value=crew_obj):
         results = run_pipeline(
             pages=[page],
-            layout=layout,
-            no_cache=CacheNoCacheFlags(extract=True),
-            text_hint=False,
+            config=_make_config(layout=layout, no_cache=CacheNoCacheFlags(extract=True)),
             llm=object(),  # type: ignore[arg-type]
-            retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.001, jitter=0.0
-            ),
-            fallback_to_text=True,
         )
 
     assert extractor_calls == [], "make_extractor must NOT run with --no-cache-extract"
@@ -259,14 +270,8 @@ def test_no_cache_extract_falls_through_when_extract_missing(
         crew_cls.return_value.kickoff = lambda: None
         results = run_pipeline(
             pages=[page],
-            layout=layout,
-            no_cache=CacheNoCacheFlags(extract=True),
-            text_hint=False,
+            config=_make_config(layout=layout, no_cache=CacheNoCacheFlags(extract=True)),
             llm=object(),  # type: ignore[arg-type]
-            retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.001, jitter=0.0
-            ),
-            fallback_to_text=True,
         )
 
     assert results[0].markdown == "fresh md"
@@ -290,14 +295,8 @@ def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
         crew_cls.return_value.kickoff = _track
         results = run_pipeline(
             pages=[page],
-            layout=layout,
-            no_cache=CacheNoCacheFlags(),
-            text_hint=False,
+            config=_make_config(layout=layout),
             llm=object(),  # type: ignore[arg-type]
-            retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.001, jitter=0.0
-            ),
-            fallback_to_text=True,
         )
 
     assert kickoff_calls == [], "trusting format.md must short-circuit the pipeline"

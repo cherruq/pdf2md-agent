@@ -7,14 +7,16 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from pdf2md_agent.token_budget import (
+from pdf2md_agent.image_budget import (
     BudgetDecision,
     _est_size_at_long_side,
     _open_for_size,
     _tokens_for_size,
+    plan_for_image,
+)
+from pdf2md_agent.token_estimator import (
     estimate_image_tokens,
     estimate_text_tokens,
-    plan_for_image,
 )
 
 

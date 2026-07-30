@@ -205,7 +205,7 @@ pdf2md-agent PDF -o OUTPUT [options]
 
 ### Token-budget planner
 
-Each extract call is sized by `pdf2md_agent.image_budget.plan_for_image` (re-exported via `pdf2md_agent.token_budget`):
+Each extract call is sized by `pdf2md_agent.image_budget.plan_for_image`:
 
 1. Estimate the token cost of the **persona** + the **per-page prompt
    variables** (text-hint, render scaffold).
@@ -372,7 +372,6 @@ src/pdf2md_agent/
 ├── pages.py                # --pages parser
 ├── pdf_renderer.py         # PyMuPDF wrapper
 ├── llm_retry.py            # bounded backoff + transient classifier
-├── token_budget.py         # back-compat shim → token_estimator + image_budget
 ├── token_estimator.py      # text + image token heuristics
 ├── image_budget.py         # plan_for_image + BudgetDecision (binary search)
 ├── vision.py               # CrewAI LLM factory
@@ -403,7 +402,6 @@ pytest -ra tests/
 |---|---|
 | `test_cache.py` | `CacheLayout`, `MetaInfo`, fingerprint read/match, atomic writes |
 | `test_no_cache.py` | `--no-cache-*` flag family, per-page priority |
-| `test_render_skip.py` | Render-side cache reuse (PNG / text / resized) |
 | `test_pages.py` | `parse_page_spec`, `resolve_pages` |
 | `test_pdf_renderer.py` | `render_pdf` shape, PNG + text-layer emit |
 | `test_llm_retry.py` | `RetryConfig` validation + `is_transient` + backoff + timeout guard |

@@ -91,3 +91,95 @@ def read_page_text(text_path: Path) -> str:
     if not text_path.exists():
         return ""
     return text_path.read_text(encoding="utf-8")
+
+
+def pdf_page_count(pdf: Path) -> int:
+    """Return the total page count of a PDF file via PyMuPDF."""
+    doc = pymupdf.open(pdf)
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
+
+
+def render_pages(
+    *,
+    pdf: Path,
+    render_target: Path,
+    dpi: int,
+    resolved_pages: list[int] | None,
+    no_cache_render: bool,
+    no_cache_text: bool,
+) -> list[PageImage]:
+    """Render the PDF, invalidating step 2 cache on real-time text drift or no-cache flags."""
+    if no_cache_render or no_cache_text:
+        return render_pdf(pdf, render_target, dpi=dpi, pages=resolved_pages)
+
+    from PIL import Image
+    from pdf2md_agent.cache import CacheLayout
+
+    layout = CacheLayout(
+        root=render_target.parent,
+        pages_dir=render_target,
+        meta_path=render_target.parent / "meta.json",
+    )
+
+    target_pages = (
+        list(resolved_pages) if resolved_pages is not None
+        else list(range(1, pdf_page_count(pdf) + 1))
+    )
+
+    doc = pymupdf.open(pdf)
+    try:
+        missing_or_drifted: list[int] = []
+        for n in target_pages:
+            png = layout.page_png_path(n)
+            txt = layout.page_text_path(n)
+            if not png.is_file():
+                missing_or_drifted.append(n)
+                continue
+
+            # Step 1 real-time check: compare freshly extracted PyMuPDF text against disk cache.
+            page = doc.load_page(n - 1)
+            new_text = page.get_text("text", sort=True)
+            if txt.exists():
+                old_text = txt.read_text(encoding="utf-8")
+                if new_text != old_text:
+                    # Inconsistent! Delete this page's Step 2 cache files and re-render.
+                    layout.page_format_path(n).unlink(missing_ok=True)
+                    layout.page_extract_path(n).unlink(missing_ok=True)
+                    for jpg_path in render_target.glob(f"page_{n:04d}_*.jpg"):
+                        jpg_path.unlink(missing_ok=True)
+                    missing_or_drifted.append(n)
+            else:
+                txt.write_text(new_text, encoding="utf-8")
+
+        if missing_or_drifted:
+            render_pdf(pdf, render_target, dpi=dpi, pages=missing_or_drifted)
+
+        pages: list[PageImage] = []
+        for n in target_pages:
+            png = layout.page_png_path(n)
+            with Image.open(png) as img:
+                pages.append(PageImage(
+                    page_number=n,
+                    width=img.width,
+                    height=img.height,
+                    image_path=png,
+                ))
+        return pages
+    finally:
+        doc.close()
+
+
+# Step 1 entry point alias for the unified conversion pipeline
+step1_render_and_sync_cache = render_pages
+
+__all__ = [
+    "PageImage",
+    "render_pdf",
+    "read_page_text",
+    "pdf_page_count",
+    "render_pages",
+    "step1_render_and_sync_cache",
+]

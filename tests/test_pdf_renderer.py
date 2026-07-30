@@ -6,7 +6,7 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from pdf2md_agent.pdf_renderer import render_pdf
+from pdf2md_agent.pdf_renderer import render_pages, render_pdf
 
 
 def _make_pdf(path: Path, pages: int = 2) -> Path:
@@ -93,3 +93,44 @@ def test_render_pdf_subset_full_coverage(tmp_path: Path) -> None:
     assert [p.page_number for p in pages] == [1, 2]
     assert (out / "page_0001.png").exists()
     assert (out / "page_0002.png").exists()
+
+
+def test_render_pages_invalidates_step2_cache_on_text_drift(tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path / "doc.pdf", pages=1)
+    out = tmp_path / "cache" / "pages"
+    out.mkdir(parents=True, exist_ok=True)
+
+    # First run: renders page 1 and saves text cache
+    render_pages(
+        pdf=pdf,
+        render_target=out,
+        dpi=72,
+        resolved_pages=None,
+        no_cache_render=False,
+        no_cache_text=False,
+    )
+    assert (out / "page_0001.png").exists()
+    assert (out / "page_0001_text.txt").exists()
+
+    # Simulate Step 2 producing cache files
+    format_path = out / "page_0001_format.md"
+    extract_path = out / "page_0001_extract.txt"
+    format_path.write_text("# Old Content", encoding="utf-8")
+    extract_path.write_text("Old extract", encoding="utf-8")
+
+    # Tamper with the saved text file on disk to simulate drift from the real PDF text
+    (out / "page_0001_text.txt").write_text("Drifted old text on disk", encoding="utf-8")
+
+    # Second run: Step 1 detects drift between real PyMuPDF text and disk text, invalidating Step 2 cache
+    render_pages(
+        pdf=pdf,
+        render_target=out,
+        dpi=72,
+        resolved_pages=None,
+        no_cache_render=False,
+        no_cache_text=False,
+    )
+
+    assert not format_path.exists(), "Step 1 must delete format.md on text drift"
+    assert not extract_path.exists(), "Step 1 must delete extract.txt on text drift"
+    assert "page 1" in (out / "page_0001_text.txt").read_text(encoding="utf-8")

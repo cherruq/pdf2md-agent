@@ -13,6 +13,7 @@ Every failure mode (DNS, HTTP error, timeout, malformed JSON, missing
 model) returns ``None`` so the caller can fall back to a hardcoded
 default without further branching.
 """
+
 from __future__ import annotations
 
 import json
@@ -22,11 +23,12 @@ from typing import Any, Final
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-
 log = logging.getLogger("pdf2md_agent.ctx_probe")
 
 
-_MAX_CTX_LIMIT: Final[int] = 1_048_576  # 1M defensive upper bound (MiniMax-Text-01 ceiling per the MSA spec sheet; MiniMax-M3 itself is 512K).
+_MAX_CTX_LIMIT: Final[int] = (
+    1_048_576  # 1M defensive upper bound (MiniMax-Text-01 ceiling per the MSA spec sheet; MiniMax-M3 itself is 512K).
+)
 
 
 _CTX_FIELD_CANDIDATES: Final[tuple[str, ...]] = (

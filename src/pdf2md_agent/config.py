@@ -1,34 +1,21 @@
-"""Project configuration loaded from the environment at import time.
-
-``config.py`` is split into four concern-grouped sections:
-
-1. **Env helpers** (:func:`_env`, :func:`_env_int`, :func:`_env_float`,
-   :func:`_env_bool`, :func:`_env_int_or_unlimited`,
-   :func:`_env_positive_float`) — strict, typed accessors with clear
-   error messages.
-2. **Endpoint + auth** (``OPENAI_BASE_URL``, ``MODEL_NAME``,
-   :func:`require_api_key`) — the OpenAI-compatible base URL, the
-   configured model, and the API-key guard.
-3. **Token budget + image downscale** (``TOKEN_BUDGET_SAFETY``,
-   ``IMAGE_LONG_SIDE``, ``IMAGE_JPEG_QUALITY``, ``IMAGE_MIN_LONG_SIDE``,
-   :func:`resolve_ctx_limit`) — knobs the
-   per-call planner reads.
-4. **LLM retry + fallback** (``RETRY_*``, ``FALLBACK_TO_TEXT``) —
-   knobs the retry/backoff layer reads.
-
-``load_dotenv()`` runs at import time; any module that imports
-``config`` transitively will read ``.env`` exactly once.
-"""
+"""Project configuration loaded from environment variables at import time."""
 from __future__ import annotations
 
 import functools
 import logging
 import os
-from typing import Final
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Final
 
 from dotenv import load_dotenv
 
 from pdf2md_agent.ctx_probe import probe_ctx_limit
+
+if TYPE_CHECKING:
+    from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
+    from pdf2md_agent.llm_retry import RetryConfig
 
 
 log = logging.getLogger("pdf2md_agent.config")
@@ -44,16 +31,7 @@ def _env(name: str, default: str = "") -> str:
     return value.strip() if value else default
 
 
-# Only essential environment helper utilities retained for core config items.
-
-
 def _env_int_or_unlimited(name: str) -> int | None:
-    """Read an integer-or-unlimited env knob.
-
-    Empty/unset → ``None`` (default = unlimited retries); ``"0"`` → ``None``
-    (explicit unlimited); positive integers → bounded attempt count.
-    Negative integers and non-numeric strings raise.
-    """
     raw = _env(name)
     if not raw:
         return None
@@ -100,18 +78,13 @@ def require_api_key() -> str:
 
 # --- Token budget + image downscale -----------------------------------------
 
-# ``resolve_ctx_limit`` consults env → ``/v1/models`` probe → hardcoded
-# default; the 0.85 safety margin keeps us off the cliff edge while a
-# paginate is in flight.
 
-_MAX_CTX_LIMIT: Final[int] = 1_048_576  # 1M, the published MiniMax-M3 ceiling.
-_DEFAULT_CTX_LIMIT: Final[int] = 128_000  # safe fallback for unrecognised models.
+_MAX_CTX_LIMIT: Final[int] = 1_048_576
+_DEFAULT_CTX_LIMIT: Final[int] = 128_000
 
-# Override by setting ``PDF2MD_AGENT_CTX_LIMIT`` or letting the runtime
-# probe succeed against ``OPENAI_BASE_URL``.
 _HARD_CODED_CTX_LIMITS: Final[dict[str, int]] = {
-    "MiniMax-M3": 524_288,  # 512K, the published guarantee.
-    "MiniMax-Text-01": 1_000_000,  # 1M ceiling, per the MSA spec sheet.
+    "MiniMax-M3": 524_288,
+    "MiniMax-Text-01": 1_000_000,
     "MiniMax-VL-01": 524_288,
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
@@ -123,20 +96,7 @@ _HARD_CODED_CTX_LIMITS: Final[dict[str, int]] = {
 
 @functools.lru_cache(maxsize=1)
 def resolve_ctx_limit() -> int:
-    """Resolve the model's context-window token budget.
-
-    Priority, highest first:
-
-    1. ``PDF2MD_AGENT_CTX_LIMIT`` env var (positive int)
-    2. ``probe_ctx_limit(OPENAI_BASE_URL, api_key, MODEL_NAME)`` clamped to
-       ``_MAX_CTX_LIMIT``; the probe is skipped entirely if
-       ``OPENAI_API_KEY`` is unset
-    3. Hardcoded default for the active ``MODEL_NAME``; falls back to
-       ``_DEFAULT_CTX_LIMIT`` if the model is unknown
-
-    Result is cached at module level; tests clear the cache via
-    ``resolve_ctx_limit.cache_clear()``.
-    """
+    """Resolve the model's context-window token budget."""
     raw = _env("PDF2MD_AGENT_CTX_LIMIT")
     if raw:
         try:
@@ -147,7 +107,7 @@ def resolve_ctx_limit() -> int:
                 )
                 return value
         except ValueError:
-            pass  # fall through to probe; the caller should fix the typo
+            pass
 
     api_key = _env("OPENAI_API_KEY")
     if api_key:
@@ -184,8 +144,7 @@ REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
 
 
 # --- LLM retry + fallback ---------------------------------------------------
-# Defaults: unlimited transient retries with Fibonacci backoff.
-# Set PDF2MD_AGENT_MAX_RETRIES (or pass --max-retries) to a positive integer to bound the budget.
+
 
 RETRY_MAX_ATTEMPTS: Final[int | None] = _env_int_or_unlimited(
     "PDF2MD_AGENT_MAX_RETRIES"
@@ -196,7 +155,32 @@ RETRY_JITTER: Final[float] = 0.25
 FALLBACK_TO_TEXT: Final[bool] = True
 
 
+# --- Job Configuration Struct -----------------------------------------------
+
+
+@dataclass(slots=True, frozen=True)
+class ConversionConfig:
+    """Immutable configuration struct for a single PDF-to-Markdown conversion job."""
+
+    pdf: Path
+    output: Path
+    dpi: int
+    layout: CacheLayout
+    render_target: Path
+    resolved_pages: list[int] | None
+    no_cache: CacheNoCacheFlags
+    retry_config: RetryConfig
+    text_hint: bool
+    image_long_side: int
+    image_jpeg_quality: int
+    ctx_limit: int
+    request_timeout_seconds: float | None
+    stitch_mode: str = "heuristic"
+    started: float = field(default_factory=time.monotonic)
+
+
 __all__ = [
+    "ConversionConfig",
     "FALLBACK_TO_TEXT",
     "IMAGE_JPEG_QUALITY",
     "IMAGE_LONG_SIDE",

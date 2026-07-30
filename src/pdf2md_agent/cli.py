@@ -1,21 +1,4 @@
-"""CLI entry point for pdf2md-agent.
-
-Top-level responsibilities:
-
-* :func:`main` — wire up logging, parse argv, dispatch to
-  :func:`cmd_convert`.
-* :func:`cmd_convert` — validate inputs, resolve the cache layout,
-  delegate the per-page pipeline to
-  :func:`pdf2md_agent.crew.runner.run_pipeline`, and stitch + write
-  the final Markdown.
-* :func:`_run_pipeline` — the runtime orchestrator that bridges the CLI
-  layer (logs, args, stitch mode) with the crew runner.
-* :func:`_render_pages` — trust-cache gate around
-  :func:`pdf2md_agent.pdf_renderer.render_pdf`.
-
-CLI errors are written to ``stderr`` via ``print(..., file=sys.stderr)``
-(intentional — logger output is reserved for run-progress diagnostics).
-"""
+"""CLI entry point for pdf2md-agent."""
 from __future__ import annotations
 
 import argparse
@@ -25,15 +8,13 @@ import time
 from pathlib import Path
 
 import pymupdf
-from PIL import Image
 
 from pdf2md_agent.cache import (
-    CacheLayout,
-    CacheNoCacheFlags,
-    atomic_write_text,
-    check_meta_matches,
-    read_meta,
-    write_meta,
+    CacheLayout as CacheLayout,  # noqa: F401
+    CacheNoCacheFlags as CacheNoCacheFlags,  # noqa: F401
+    atomic_write_text as atomic_write_text,  # noqa: F401
+    read_meta as read_meta,  # noqa: F401
+    write_meta as write_meta,  # noqa: F401
 )
 from pdf2md_agent.cli_parser import (
     _resolve_layout,
@@ -42,21 +23,24 @@ from pdf2md_agent.cli_parser import (
     build_retry_config,
 )
 from pdf2md_agent.config import (
-    FALLBACK_TO_TEXT,
     IMAGE_JPEG_QUALITY,
     IMAGE_LONG_SIDE,
-    IMAGE_MIN_LONG_SIDE,
     REQUEST_TIMEOUT_SECONDS,
-    TOKEN_BUDGET_SAFETY,
+    ConversionConfig,
     resolve_ctx_limit,
 )
-from pdf2md_agent.crew.runner import run_pipeline
+from pdf2md_agent.crew.runner import run_pipeline as run_pipeline  # noqa: F401
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import resolve_pages
-from pdf2md_agent.pdf_renderer import PageImage, render_pdf
-from pdf2md_agent.post_stream import StitchMode, stitch_pages
-from pdf2md_agent.render_skip import maybe_skip_render as _maybe_skip_render
-from pdf2md_agent.vision import make_vision_llm
+from pdf2md_agent.pdf_renderer import (
+    PageImage as PageImage,  # noqa: F401
+    pdf_page_count as _pdf_page_count,  # noqa: F401
+    render_pages as _render_pages,  # noqa: F401
+    render_pdf as render_pdf,  # noqa: F401
+)
+from pdf2md_agent.pipeline import run_unified_conversion
+from pdf2md_agent.post_stream import stitch_pages as stitch_pages  # noqa: F401
+from pdf2md_agent.vision import make_vision_llm as make_vision_llm  # noqa: F401
 
 log = logging.getLogger("pdf2md-agent")
 
@@ -79,11 +63,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _validate_pdf_header(pdf: Path) -> int | None:
-    """Return an exit code if the file is missing/unreadable/not a PDF; else None.
-
-    Fail-fast on bad input (D10-N04): we don't want to commit to creating
-    a tempdir or doing render work for a non-PDF.
-    """
+    """Return exit code if the file is missing, unreadable, or not a PDF; else None."""
     if not pdf.exists():
         print(f"error: input PDF not found: {pdf}", file=sys.stderr)
         return 1
@@ -108,12 +88,7 @@ def _validate_pdf_header(pdf: Path) -> int | None:
 def _resolve_requested_pages(
     pdf: Path, pages_spec: object
 ) -> tuple[list[int] | None, int | None]:
-    """Validate ``pages_spec`` against the PDF's page count.
-
-    Returns ``(resolved_pages, exit_code)`` — ``exit_code`` is non-None if
-    validation failed. ``resolved_pages`` is ``None`` (all pages) when
-    ``pages_spec`` is ``None``.
-    """
+    """Validate ``pages_spec`` against the PDF's page count."""
     if pages_spec is None:
         return None, None
     doc = pymupdf.open(pdf)
@@ -130,7 +105,7 @@ def _resolve_requested_pages(
     return resolved, None
 
 
-# --- Orchestration ----------------------------------------------------------
+# --- Orchestration Gateway --------------------------------------------------
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
@@ -142,215 +117,79 @@ def cmd_convert(args: argparse.Namespace) -> int:
     if header_exit is not None:
         return header_exit
 
-    fallback_to_text = FALLBACK_TO_TEXT
-    keep_intermediates = not args.no_intermediates
     no_cache_flags = _resolve_no_cache_flags(args)
-
     resolved_pages, pages_exit = _resolve_requested_pages(args.pdf, args.pages)
     if pages_exit is not None:
         return pages_exit
 
-    layout, render_target = _resolve_layout(
-        args.pdf, args.intermediates_dir, keep_intermediates
-    )
-    return _run_pipeline(
-        args=args,
+    layout, render_target = _resolve_layout(args.pdf, args.intermediates_dir)
+
+    config = ConversionConfig(
+        pdf=args.pdf,
+        output=args.output,
+        dpi=args.dpi,
         layout=layout,
         render_target=render_target,
         resolved_pages=resolved_pages,
-        keep_intermediates=keep_intermediates,
-        retry_config=retry_config,
-        fallback_to_text=fallback_to_text,
-        started=time.monotonic(),
         no_cache=no_cache_flags,
+        retry_config=retry_config,
+        text_hint=not getattr(args, "no_text_hint", False),
+        image_long_side=getattr(args, "image_long_side", None) or IMAGE_LONG_SIDE,
+        image_jpeg_quality=getattr(args, "image_quality", None) or IMAGE_JPEG_QUALITY,
+        ctx_limit=getattr(args, "ctx_limit", None) or resolve_ctx_limit(),
+        request_timeout_seconds=getattr(args, "request_timeout", None) or REQUEST_TIMEOUT_SECONDS,
+        stitch_mode=getattr(args, "stitch_mode", "heuristic"),
+        started=time.monotonic(),
     )
+    return run_unified_conversion(config)
 
 
-# --- Render-time helpers ----------------------------------------------------
-
-
-def _pdf_page_count(pdf: Path) -> int:
-    """Return the page count of ``pdf`` via PyMuPDF."""
-    doc = pymupdf.open(pdf)
-    try:
-        return doc.page_count
-    finally:
-        doc.close()
-
-
-def _render_pages(
-    *,
-    pdf: Path,
-    render_target: Path,
-    dpi: int,
-    resolved_pages: list[int] | None,
-    keep_intermediates: bool,
-    no_cache_render: bool,
-    no_cache_text: bool,
-) -> list[PageImage]:
-    """Render the PDF, optionally reusing per-page PNG/text cache.
-
-    When ``keep_intermediates`` is True and the no-cache flags are unset,
-    pages whose PNG/text are already on disk are returned without touching
-    PyMuPDF — that's the trust-cache fast path. With either flag set, the
-    pipeline always re-renders / re-extracts.
-    """
-    if not keep_intermediates or no_cache_render or no_cache_text:
-        return render_pdf(pdf, render_target, dpi=dpi, pages=resolved_pages)
-
-    layout = CacheLayout(
-        root=render_target.parent,
-        pages_dir=render_target,
-        meta_path=render_target.parent / "meta.json",
-    )
-
-    target_pages: list[int] = (
-        list(resolved_pages) if resolved_pages is not None
-        else list(range(1, _pdf_page_count(pdf) + 1))
-    )
-    missing: list[int] = [
-        n for n in target_pages if _maybe_skip_render(layout, n, dpi) is None
-    ]
-    if missing:
-        render_pdf(pdf, render_target, dpi=dpi, pages=missing)
-    pages: list[PageImage] = []
-    for n in target_pages:
-        png = layout.page_png_path(n)
-        with Image.open(png) as img:
-            pages.append(PageImage(
-                page_number=n,
-                width=img.width,
-                height=img.height,
-                image_path=png,
-            ))
-    return pages
-
-
-# --- Pipeline bridge --------------------------------------------------------
-
-
+# Backward-compatible wrapper for tests calling _run_pipeline directly
 def _run_pipeline(
     *,
     args: argparse.Namespace,
     layout: CacheLayout,
     render_target: Path,
     resolved_pages: list[int] | None,
-    keep_intermediates: bool,
     retry_config: RetryConfig,
-    fallback_to_text: bool,
-    started: float,
+    fallback_to_text: bool = True,
+    started: float = 0.0,
     no_cache: CacheNoCacheFlags,
 ) -> int:
-    log.info("converting %s", args.pdf)
-    log.info("  output:          %s", args.output)
-    log.info("  cache:           %s", layout.root if keep_intermediates else "(tempdir, discarded)")
-    log.info("  dpi:             %d", args.dpi)
-    log.info("  pages:           %s", "all" if resolved_pages is None else resolved_pages)
-    log.info("  no-cache:        %s", no_cache.as_dict())
-    log.info("  text-hint:       %s", "on" if not args.no_text_hint else "off")
-
-    if keep_intermediates:
-        existing_meta = read_meta(layout.meta_path)
-        # ``--no-cache-all`` discards every cached output, so the on-disk
-        # fingerprint (about to be overwritten by ``write_meta`` below) is
-        # no longer load-bearing — refusing on drift would create a circular
-        # error the user can't escape.
-        if existing_meta is not None and not no_cache.all():
-            reasons = check_meta_matches(
-                existing_meta,
-                pdf=str(args.pdf.resolve()),
-            )
-            # ``pages`` is informational only: per-page outputs are
-            # reused via file-existence checks (``is_page_complete`` /
-            # ``maybe_skip_render``), so a wider cached page set is
-            # always safe to reuse. Only the missing pages get
-            # processed. All other fingerprint fields indicate real
-            # stale-output risk and must hard-fail.
-            if reasons:
-                for r in reasons:
-                    print(f"error: cache invalid: {r}", file=sys.stderr)
-                print(
-                    "error: meta.json fingerprint drift detected. "
-                    "re-run with --no-cache-all or wipe "
-                    f"{layout.root} to rebuild the cache.",
-                    file=sys.stderr,
-                )
-                return 1
-        write_meta(
-            layout.meta_path,
-            pdf=args.pdf,
-        )
-
-    log.info("rendering PDF to PNGs at %d dpi%s...", args.dpi, " (subset)" if resolved_pages else "")
-    pages = _render_pages(
+    """Backward-compatible wrapper for tests calling _run_pipeline directly."""
+    if started <= 0.0:
+        started = time.monotonic()
+    config = ConversionConfig(
         pdf=args.pdf,
-        render_target=render_target,
+        output=args.output,
         dpi=args.dpi,
-        resolved_pages=resolved_pages,
-        keep_intermediates=keep_intermediates,
-        no_cache_render=no_cache.render,
-        no_cache_text=no_cache.text,
-    )
-    log.info("rendered %d page(s) to %s", len(pages), render_target)
-
-    log.info("running pipeline: extract + format")
-    llm = make_vision_llm()
-    log.info(
-        "  retry:           max_attempts=%s, initial_delay=%.1fs, fibonacci, max_delay=%.1fs, jitter=±%.0f%%",
-        retry_config.max_attempts if retry_config.max_attempts is not None else "\u221e",
-        retry_config.initial_delay,
-        retry_config.max_delay,
-        retry_config.jitter * 100,
-    )
-    log.info("  fallback:        %s", "text layer" if fallback_to_text else "off")
-    image_long_side = args.image_long_side if args.image_long_side is not None else IMAGE_LONG_SIDE
-    image_jpeg_quality = args.image_quality if args.image_quality is not None else IMAGE_JPEG_QUALITY
-    ctx_limit = args.ctx_limit if args.ctx_limit is not None else resolve_ctx_limit()
-    log.info(
-        "  budget:          ctx_limit=%d, safety=%.0f%%, image_long_side=%dpx, "
-        "image_q=%d",
-        ctx_limit,
-        TOKEN_BUDGET_SAFETY * 100,
-        image_long_side,
-        image_jpeg_quality,
-    )
-    results = run_pipeline(
-        pages=pages,
         layout=layout,
+        render_target=render_target,
+        resolved_pages=resolved_pages,
         no_cache=no_cache,
-        text_hint=not args.no_text_hint,
-        llm=llm,
         retry_config=retry_config,
-        fallback_to_text=fallback_to_text,
-        ctx_limit=ctx_limit,
-        image_long_side=image_long_side,
-        image_min_long_side=IMAGE_MIN_LONG_SIDE,
-        image_jpeg_quality=image_jpeg_quality,
-        token_budget_safety=TOKEN_BUDGET_SAFETY,
-        request_timeout_seconds=(
-            args.request_timeout
-            if args.request_timeout is not None
-            else REQUEST_TIMEOUT_SECONDS
-        ),
+        text_hint=not getattr(args, "no_text_hint", False),
+        image_long_side=getattr(args, "image_long_side", None) or IMAGE_LONG_SIDE,
+        image_jpeg_quality=getattr(args, "image_quality", None) or IMAGE_JPEG_QUALITY,
+        ctx_limit=getattr(args, "ctx_limit", None) or resolve_ctx_limit(),
+        request_timeout_seconds=getattr(args, "request_timeout", None) or REQUEST_TIMEOUT_SECONDS,
+        stitch_mode=getattr(args, "stitch_mode", "heuristic"),
+        started=started,
     )
-
-    stitch_mode = StitchMode(args.stitch_mode)
-    if stitch_mode is StitchMode.HEURISTIC:
-        markdown = stitch_pages(results)
-        log.info("  stitch:          heuristic (cross-page merged)")
-    else:
-        markdown = stitch_pages(results, mode=stitch_mode)
-        log.info("  stitch:          off (legacy '---' separator preserved)")
-    atomic_write_text(args.output, markdown)
-    elapsed = time.monotonic() - started
-    log.info(
-        "wrote %s — %d page(s), %s chars in %.1fs",
-        args.output,
-        len(results),
-        f"{len(markdown):,}",
-        elapsed,
-    )
-    return 0
+    return run_unified_conversion(config)
 
 
-__all__ = ["main"]
+# Step 1, 2, 3 aliases for clear 3-step architecture
+step1_render_and_sync_cache = _render_pages
+step2_extract_pages = run_pipeline
+step3_stitch_and_clean = stitch_pages
+
+__all__ = [
+    "build_parser",
+    "cmd_convert",
+    "main",
+    "run_unified_conversion",
+    "step1_render_and_sync_cache",
+    "step2_extract_pages",
+    "step3_stitch_and_clean",
+]

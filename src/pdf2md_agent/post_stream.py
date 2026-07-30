@@ -32,6 +32,7 @@ remaining buffer at end of document. The top-level helper
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator
 from enum import Enum
 
@@ -89,12 +90,93 @@ def stitch_pages(
     if mode == StitchMode.OFF:
         return _LEGACY_SEPARATOR.join(r.markdown for r in pages)
 
+    page_list = list(pages)
+    cleaned_mds = _clean_page_markdown(page_list)
+
     stitcher = StreamingStitcher()
     chunks: list[str] = []
-    for r in pages:
-        chunks.extend(stitcher.feed(r.markdown))
+    for md in cleaned_mds:
+        chunks.extend(stitcher.feed(md))
     chunks.extend(stitcher.finalize())
     return _BLOCK_SEPARATOR.join(chunks)
+
+
+def _strip_repeating_header_footer(text: str, compare_text: str) -> str:
+    """Strip repeating running header or footer lines across adjacent pages."""
+    if not text or not compare_text:
+        return text
+
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    comp_lines = [ln.strip() for ln in compare_text.splitlines() if ln.strip()]
+    if not lines or not comp_lines:
+        return text
+
+    first_idx = next((k for k, ln in enumerate(lines) if ln.strip()), None)
+    if first_idx is not None and len(lines) > 1:
+        first_line = lines[first_idx].strip()
+        if (
+            len(first_line) >= 4
+            and len(first_line) <= 120
+            and not first_line.startswith(("|", "```", "~~~"))
+            and first_line == comp_lines[0]
+        ):
+            lines[first_idx] = ""
+
+    last_idx = next(
+        (k for k in range(len(lines) - 1, -1, -1) if lines[k].strip()), None
+    )
+    if last_idx is not None and last_idx != first_idx and len(lines) > 1:
+        last_line = lines[last_idx].strip()
+        if (
+            len(last_line) >= 4
+            and len(last_line) <= 120
+            and not last_line.startswith(("|", "```", "~~~"))
+            and last_line == comp_lines[-1]
+        ):
+            lines[last_idx] = ""
+
+    return "\n".join(lines).strip()
+
+
+def _strip_standalone_page_numbers(text: str) -> str:
+    """Strip leading and trailing standalone page number lines."""
+    if not text:
+        return text
+    lines = text.splitlines()
+    no_pat = re.compile(
+        r"^\s*(?:[-–—\s]*\d+[-–—\s]*|page\s*\d+|第\s*\d+\s*[页张])\s*$",
+        re.IGNORECASE,
+    )
+    while lines and no_pat.match(lines[0]):
+        lines.pop(0)
+    while lines and no_pat.match(lines[-1]):
+        lines.pop(-1)
+    return "\n".join(lines).strip()
+
+
+
+def _clean_page_markdown(pages: list[PageResult]) -> list[str]:
+    """Strip repeating running headers/footers and standalone page numbers across pages."""
+    cleaned: list[str] = []
+    n = len(pages)
+    for i, r in enumerate(pages):
+        text = r.markdown.strip()
+        if not text:
+            cleaned.append("")
+            continue
+
+        if n > 1:
+            neighbors: list[str] = []
+            if i > 0:
+                neighbors.append(pages[i - 1].markdown)
+            if i < n - 1:
+                neighbors.append(pages[i + 1].markdown)
+            for compare_text in neighbors:
+                text = _strip_repeating_header_footer(text, compare_text)
+
+        text = _strip_standalone_page_numbers(text)
+        cleaned.append(text)
+    return cleaned
 
 
 class StreamingStitcher:
@@ -159,4 +241,12 @@ class StreamingStitcher:
             self._buffer = ""
 
 
-__all__ = ["StitchMode", "StreamingStitcher", "stitch_pages"]
+# Step 3 entry point alias for the unified conversion pipeline
+step3_stitch_and_clean = stitch_pages
+
+__all__ = [
+    "StitchMode",
+    "StreamingStitcher",
+    "step3_stitch_and_clean",
+    "stitch_pages",
+]

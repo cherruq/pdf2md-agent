@@ -19,19 +19,18 @@ pdf2md-agent/
 ├── pyproject.toml            # uv-managed, hatchling backend
 ├── .env.example              # OPENAI_* + PDF2MD_AGENT_* template
 ├── src/pdf2md_agent/         # main package — see src/pdf2md_agent/AGENTS.md
-│   ├── cli.py                # CLI entry + per-run orchestration
+│   ├── cli.py                # CLI entry gateway + arg parser invocation
+│   ├── pipeline.py           # ConversionConfig struct + run_unified_conversion 3-step engine
 │   ├── cli_parser.py         # argparse definition + post-parse resolvers
 │   ├── filesystem_safety.py  # cache-key / Windows-reserved-name helpers
 │   ├── cache.py              # CacheLayout + meta validation + atomic writes
 │   ├── config.py             # env bindings + ctx-limit resolver
 │   ├── ctx_probe.py          # /v1/models probe
 │   ├── llm_retry.py          # RetryConfig + Fibonacci backoff + timeout guard
-│   ├── token_budget.py       # back-compat shim → token_estimator + image_budget
 │   ├── token_estimator.py    # text + image token heuristics
 │   ├── image_budget.py       # plan_for_image + BudgetDecision (binary search)
 │   ├── pages.py              # --pages parser
 │   ├── pdf_renderer.py       # PyMuPDF render
-│   ├── render_skip.py        # trust-cache gates for PNG / resized JPEG
 │   ├── post_stream.py        # StreamingStitcher public API
 │   ├── post_stream_decision.py  # block split + continuation + smart join + CJK
 │   ├── post_stream_table.py  # table-row continuation + header dedup
@@ -66,7 +65,8 @@ pdf2md-agent/
 
 | Symbol | Location | Role |
 |---|---|---|
-| `pdf2md_agent.cli:main` | cli.py | CLI entry; `pdf2md-agent` script + `python -m pdf2md_agent`; `--version`, `--no-cache-*`, `--request-timeout` |
+| `pdf2md_agent.cli:main` | cli.py | CLI entry; `pdf2md-agent` script + `python -m pdf2md_agent`; slim gateway into `pipeline.py` |
+| `pdf2md_agent.pipeline.run_unified_conversion` | pipeline.py | 3-step pipeline orchestrator running off immutable `ConversionConfig` struct |
 | `pdf2md_agent.crew.runner.run_pipeline` | crew/runner.py | per-page crew orchestration with `CacheNoCacheFlags` (format short-circuit → extract short-circuit → full pipeline) |
 | `pdf2md_agent.crew.extraction.run_extraction_loop` | crew/extraction.py | one page's extract → format loop |
 | `pdf2md_agent.crew.page_image.prepare_page_image` | crew/page_image.py | budget + downscale + tile-split for one page |
@@ -74,8 +74,6 @@ pdf2md-agent/
 | `pdf2md_agent.cache.CacheNoCacheFlags` | cache.py | Typed per-resource opt-out switches (`render/text/resized/extract/format`) |
 | `pdf2md_agent.cache.MetaInfo` | cache.py | Frozen fingerprint of `meta.json` (`pdf` file path) |
 | `pdf2md_agent.cache.FALLBACK_SENTINEL` | cache.py | Sentinel prefix `cache.has_cached_extract` refuses to trust |
-| `pdf2md_agent.render_skip.maybe_skip_render` | render_skip.py | Trust-cache gate for per-page PNG re-render |
-| `pdf2md_agent.render_skip.maybe_skip_resized` | render_skip.py | Trust-cache gate for the downscaled JPEG re-creation |
 | `pdf2md_agent.ctx_probe` | ctx_probe.py | `Request`/`urlopen` to `/v1/models` for context-window limit; `resolve_ctx_limit` is called from `cli._run_pipeline` and falls through to hardcoded defaults per model |
 | `pdf2md_agent.multimodal_patch.patch_add_image_tool` | crew/multimodal_patch.py | idempotent monkey-patch on `AddImageTool._run` (REQUIRED) |
 | `pdf2md_agent.post_stream.stitch_pages` | post_stream.py | cross-page markdown joining (StreamingStitcher, default mode) |
@@ -92,7 +90,7 @@ pdf2md-agent/
 ## CONVENTIONS (project-specific only)
 
 - **`from __future__ import annotations`** at top of every module.
-- Frozen + slotted `@dataclass` for value types (`RetryConfig`, `BudgetDecision`, `CacheLayout`, `CacheNoCacheFlags`, `MetaInfo`, `PageArtifacts`, `PageImage`, `PageResult`); avoid pydantic.
+- Frozen + slotted `@dataclass` for value types (`ConversionConfig`, `RetryConfig`, `BudgetDecision`, `CacheLayout`, `CacheNoCacheFlags`, `MetaInfo`, `PageArtifacts`, `PageImage`, `PageResult`); avoid pydantic.
 - Module-local logger: `log = logging.getLogger("pdf2md_agent.<area>")` (root logger name `"pdf2md-agent"`).
 - Env vars prefixed `PDF2MD_AGENT_*`; loaded once at `config.py` import via `dotenv.load_dotenv()`. CLI flags override env.
 - Tests monkeypatch `make_vision_llm` at `pdf2md_agent.crew.runner.make_vision_llm` (re-exported `noqa: F401`) — no real API calls.
@@ -131,7 +129,7 @@ uv run pdf2md-agent --no-cache-all -o sample_output.md sample/test.pdf   # end-t
 
 - Cache key = PDF stem (≤ 60 chars, no path separators) **or** the first 16 chars of `sha256(absolute PDF path)`. Two PDFs at different absolute paths always land in different cache directories.
 - `meta.json` carries a simple validation fingerprint (`pdf` absolute file path). A drift in the canonical file path forces a re-run on the next invocation.
-- Version is duplicated: `pyproject.toml` and `src/pdf2md_agent/__about__.py` both pin `0.2.0` — update both together.
+- Version is duplicated: `pyproject.toml` and `src/pdf2md_agent/__init__.py` both pin `0.2.1` — update both together.
 - `--no-cache-format` short-circuits the entire per-page pipeline when `format.md` is on disk. `--no-cache-extract` re-runs only the formatter when `extract.txt` is on disk. `--no-cache-all` is the universal kill switch.
 - The MiniMax-M3 endpoint occasionally returns scratchpad blocks (delimited by XML-like tags) in formatter output; `_strip_think()` in `crew/output.py` removes them defensively.
 - `StreamingStitcher` (post-`#5`) defaults ON via `--stitch-mode heuristic`; legacy `\n\n---\n\n` separator retained only when `--stitch-mode off`.

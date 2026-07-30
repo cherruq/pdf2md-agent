@@ -9,13 +9,13 @@ from unittest.mock import patch
 
 import pytest
 
-from pdf2md_agent import cli
+from pdf2md_agent import cli, pipeline
 from pdf2md_agent.cache import (
     CacheLayout,
     is_page_complete,
 )
 from pdf2md_agent.cli_parser import _safe_intermediates_dir
-from pdf2md_agent.cli_parser import _safe_cache_stem
+from pdf2md_agent.filesystem_safety import safe_cache_stem as _safe_cache_stem
 from pdf2md_agent.cache import atomic_write_text as _atomic_write_text
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
@@ -117,7 +117,6 @@ def test_cli_parse_known_args() -> None:
     assert args.output == Path("out.md")
     assert args.dpi == 144
     assert args.pages is None
-    assert args.no_intermediates is False
     assert args.no_text_hint is False
 
 
@@ -153,8 +152,8 @@ def test_cli_version_prints_and_exits(capsys) -> None:
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert "pdf2md-agent" in out
-    from pdf2md_agent import __about__
-    assert __about__.__version__ in out
+    from pdf2md_agent import __version__
+    assert __version__ in out
 
 
 def test_cli_request_timeout_rejects_zero() -> None:
@@ -293,10 +292,10 @@ def test_meta_fingerprint_drift_refuses_run(tmp_path: Path) -> None:
         else:
             captured["stderr"] += msg + "\n"
 
-    with patch.object(cli, "_render_pages", return_value=[]), \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
-         patch.object(cli, "run_pipeline", return_value=[]), \
-         patch.object(cli, "stitch_pages", return_value=""), \
+    with patch.object(pipeline, "_render_pages", return_value=[]), \
+         patch.object(pipeline, "make_vision_llm", return_value=object()), \
+         patch.object(pipeline, "run_pipeline", return_value=[]), \
+         patch.object(pipeline, "stitch_pages", return_value=""), \
          patch("builtins.print", side_effect=_capture_print):
         rc = cli.main([
             str(pdf_path),
@@ -323,10 +322,10 @@ def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
     pdf_path = tmp_path / "input.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
-    with patch.object(cli, "_render_pages", return_value=[]), \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
-         patch.object(cli, "run_pipeline", return_value=[]), \
-         patch.object(cli, "stitch_pages", return_value=""):
+    with patch.object(pipeline, "_render_pages", return_value=[]), \
+         patch.object(pipeline, "make_vision_llm", return_value=object()), \
+         patch.object(pipeline, "run_pipeline", return_value=[]), \
+         patch.object(pipeline, "stitch_pages", return_value=""):
         rc = cli.main([
             str(pdf_path),
             "-o", str(tmp_path / "out.md"),

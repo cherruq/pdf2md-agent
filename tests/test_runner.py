@@ -11,6 +11,7 @@ from openai import APITimeoutError, BadRequestError
 from pydantic import ValidationError
 
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
+from pdf2md_agent.config import ConversionConfig
 from pdf2md_agent.crew import runner
 from pdf2md_agent.crew.runner import PageImage, run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
@@ -55,6 +56,28 @@ def _no_cache() -> CacheNoCacheFlags:
     return CacheNoCacheFlags()
 
 
+def _make_config(
+    layout: CacheLayout,
+    no_cache: CacheNoCacheFlags = CacheNoCacheFlags(),
+    retry_config: RetryConfig | None = None,
+) -> ConversionConfig:
+    return ConversionConfig(
+        pdf=Path("dummy.pdf"),
+        output=Path("out.md"),
+        dpi=144,
+        layout=layout,
+        render_target=Path("render"),
+        resolved_pages=None,
+        no_cache=no_cache,
+        retry_config=retry_config or RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
+        text_hint=False,
+        image_long_side=1536,
+        image_jpeg_quality=85,
+        ctx_limit=100000,
+        request_timeout_seconds=60.0,
+    )
+
+
 def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -77,13 +100,11 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
             caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
             results = run_pipeline(
                 pages=[page],
-                layout=layout,
-                no_cache=_no_cache(),
-                text_hint=False,
-                llm=object(),  # type: ignore[arg-type]
-                retry_config=RetryConfig(
-                    max_attempts=2, initial_delay=0.001, jitter=0.0
+                config=_make_config(
+                    layout=layout,
+                    retry_config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
                 ),
+                llm=object(),  # type: ignore[arg-type]
                 fallback_to_text=True,
             )
 
@@ -117,13 +138,11 @@ def test_run_pipeline_does_not_fall_back_for_permanent_errors(
             with pytest.raises(BadRequestError):
                 run_pipeline(
                     pages=[page],
-                    layout=layout,
-                    no_cache=_no_cache(),
-                    text_hint=False,
-                    llm=object(),  # type: ignore[arg-type]
-                    retry_config=RetryConfig(
-                        max_attempts=2, initial_delay=0.001, jitter=0.0
+                    config=_make_config(
+                        layout=layout,
+                        retry_config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
                     ),
+                    llm=object(),  # type: ignore[arg-type]
                     fallback_to_text=True,
                 )
 
@@ -148,13 +167,11 @@ def test_run_pipeline_propagates_when_fallback_disabled(
             with pytest.raises(APITimeoutError):
                 run_pipeline(
                     pages=[page],
-                    layout=layout,
-                    no_cache=_no_cache(),
-                    text_hint=False,
-                    llm=object(),  # type: ignore[arg-type]
-                    retry_config=RetryConfig(
-                        max_attempts=2, initial_delay=0.001, jitter=0.0
+                    config=_make_config(
+                        layout=layout,
+                        retry_config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
                     ),
+                    llm=object(),  # type: ignore[arg-type]
                     fallback_to_text=False,
                 )
 
@@ -193,13 +210,11 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
             caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
             results = run_pipeline(
                 pages=[page],
-                layout=layout,
-                no_cache=_no_cache(),
-                text_hint=False,
-                llm=object(),  # type: ignore[arg-type]
-                retry_config=RetryConfig(
-                    max_attempts=1, initial_delay=0.001, jitter=0.0
+                config=_make_config(
+                    layout=layout,
+                    retry_config=RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
                 ),
+                llm=object(),  # type: ignore[arg-type]
                 fallback_to_text=True,
             )
 
@@ -233,13 +248,11 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
             with pytest.raises(ValidationError):
                 run_pipeline(
                     pages=[page],
-                    layout=layout,
-                    no_cache=_no_cache(),
-                    text_hint=False,
-                    llm=object(),  # type: ignore[arg-type]
-                    retry_config=RetryConfig(
-                        max_attempts=1, initial_delay=0.001, jitter=0.0
+                    config=_make_config(
+                        layout=layout,
+                        retry_config=RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
                     ),
+                    llm=object(),  # type: ignore[arg-type]
                     fallback_to_text=False,
                 )
 
@@ -273,13 +286,11 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
                 crew_cls.return_value.kickoff = lambda: None
                 results = run_pipeline(
                     pages=[page],
-                    layout=layout,
-                    no_cache=_no_cache(),
-                    text_hint=False,
-                    llm=object(),  # type: ignore[arg-type]
-                    retry_config=RetryConfig(
-                        max_attempts=1, initial_delay=0.001, jitter=0.0
+                    config=_make_config(
+                        layout=layout,
+                        retry_config=RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
                     ),
+                    llm=object(),  # type: ignore[arg-type]
                     fallback_to_text=True,
                 )
             called_with_kw = any(

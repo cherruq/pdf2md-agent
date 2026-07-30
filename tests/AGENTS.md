@@ -7,15 +7,14 @@ Flat directory; one module-level test file per source module. No `conftest.py`, 
 | Source module | Test file |
 |---|---|
 | `src/pdf2md_agent/cache.py` | `test_cache.py` |
-| `src/pdf2md_agent/cli.py` | `test_misc_coverage.py`, `test_d8_coverage.py` |
+| `src/pdf2md_agent/cli.py` & `pipeline.py` | `test_misc_coverage.py`, `test_d8_coverage.py` |
 | `src/pdf2md_agent/config.py` | `test_config.py` |
 | `src/pdf2md_agent/ctx_probe.py` | `test_ctx_probe.py` |
 | `src/pdf2md_agent/llm_retry.py` | `test_llm_retry.py` |
 | `src/pdf2md_agent/pages.py` | `test_pages.py` |
 | `src/pdf2md_agent/pdf_renderer.py` | `test_pdf_renderer.py` |
 | `src/pdf2md_agent/post_stream.py` | `test_post_stream.py` |
-| `src/pdf2md_agent/render_skip.py` | `test_render_skip.py` |
-| `src/pdf2md_agent/token_budget.py` | `test_token_budget.py` |
+| `src/pdf2md_agent/image_budget.py` & `token_estimator.py` | `test_token_budget.py` |
 | `src/pdf2md_agent/vision.py` | `test_vision.py` |
 | `src/pdf2md_agent/crew/runner.py` | `test_runner.py`, `test_no_cache.py` |
 | `src/pdf2md_agent/crew/multimodal_patch.py` | `test_d8_coverage.py` (encoding helpers), `test_runner.py` (via `make_vision_llm` patch) |

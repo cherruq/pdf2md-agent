@@ -31,7 +31,7 @@ import pymupdf
 import pytest
 from PIL import Image
 
-from pdf2md_agent import cli
+from pdf2md_agent import cli, pdf_renderer, pipeline
 from pdf2md_agent.cache import CacheLayout
 from pdf2md_agent.cli import _resolve_layout
 from pdf2md_agent.crew import agents
@@ -76,7 +76,7 @@ def _write_png(path: Path, *, width: int, height: int, color: str = "red") -> Pa
 # ===========================================================================
 
 
-def test_resolve_layout_keep_intermediates_default_root(
+def test_resolve_layout_default_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Default root is the literal relative ``.pdf2md-agent-cache/<safe_stem>``."""
@@ -84,7 +84,7 @@ def test_resolve_layout_keep_intermediates_default_root(
     pdf = tmp_path / "report.pdf"
     pdf.write_bytes(b"%PDF-1.4 fake")
 
-    layout, render_target = _resolve_layout(pdf, override=None, keep_intermediates=True)
+    layout, render_target = _resolve_layout(pdf, override=None)
 
     assert layout.root == Path(".pdf2md-agent-cache") / "report"
     assert render_target == layout.root / "pages"
@@ -92,31 +92,16 @@ def test_resolve_layout_keep_intermediates_default_root(
     assert (tmp_path / layout.pages_dir).is_dir()
 
 
-def test_resolve_layout_keep_intermediates_with_override(tmp_path: Path) -> None:
+def test_resolve_layout_with_override(tmp_path: Path) -> None:
     """``--intermediates-dir`` is honored verbatim (path-traversal pre-validated)."""
     pdf = tmp_path / "report.pdf"
     pdf.write_bytes(b"%PDF-1.4 fake")
     override = tmp_path / "custom" / "cache"
 
-    layout, render_target = _resolve_layout(pdf, override=override, keep_intermediates=True)
+    layout, render_target = _resolve_layout(pdf, override=override)
 
     assert layout.root == override
     assert render_target == override / "pages"
-
-
-def test_resolve_layout_no_intermediates_uses_tempdir(tmp_path: Path) -> None:
-    """``--no-intermediates`` builds the layout under a tempdir; pages dir is pre-created."""
-    pdf = tmp_path / "report.pdf"
-    pdf.write_bytes(b"%PDF-1.4 fake")
-
-    layout, render_target = _resolve_layout(pdf, override=None, keep_intermediates=False)
-
-    # Layout root lives under the system tempdir — NOT under CWD.
-    assert ".pdf2md-agent-cache" not in str(layout.root)
-    assert "pdf2md_agent_" in layout.root.name  # mkdtemp prefix preserved
-    assert layout.root.is_dir()
-    assert render_target == layout.pages_dir
-    assert layout.pages_dir.is_dir()
 
 
 # ===========================================================================
@@ -141,7 +126,6 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         output=tmp_path / "out.md",
         dpi=144,
         pages=None,
-        no_intermediates=False,
         intermediates_dir=None,
         no_text_hint=False,
         no_fallback_to_text=False,
@@ -181,13 +165,13 @@ def test_cmd_convert_happy_path_writes_output_atomically(
         page_number=1, width=72, height=72, image_path=png_path,
     )
 
-    with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
-         patch.object(cli, "run_pipeline", return_value=[
+    with patch.object(pdf_renderer, "render_pdf", return_value=[page]) as mock_render, \
+         patch.object(pipeline, "make_vision_llm", return_value=object()), \
+         patch.object(pipeline, "run_pipeline", return_value=[
              PageResult(page_number=1, markdown="# Title\n\n- item\n"),
          ]) as mock_run, \
-         patch.object(cli, "stitch_pages", return_value="# Title\n\n- item\n") as mock_stitch, \
-         patch.object(cli, "write_meta") as mock_write_meta:
+         patch.object(pipeline, "stitch_pages", return_value="# Title\n\n- item\n") as mock_stitch, \
+         patch.object(pipeline, "write_meta") as mock_write_meta:
         rc = cli.cmd_convert(args)
 
     assert rc == 0
@@ -201,33 +185,6 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     )
 
 
-def test_cmd_convert_no_intermediates_does_not_emit_meta(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``--no-intermediates`` short-circuits meta.json emission (tempdir-only cache)."""
-    monkeypatch.chdir(tmp_path)
-    pdf = _make_onepage_pdf(tmp_path / "in.pdf")
-    args = _build_minimal_args(tmp_path, pdf)
-    args.no_intermediates = True
-
-    page = PageImage(
-        page_number=1, width=72, height=72, image_path=tmp_path / "page_0001.png",
-    )
-
-    with patch.object(cli, "render_pdf", return_value=[page]), \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
-         patch.object(cli, "run_pipeline", return_value=[
-             PageResult(page_number=1, markdown="hi"),
-         ]), \
-         patch.object(cli, "stitch_pages", return_value="hi"), \
-         patch.object(cli, "write_meta") as mock_write_meta:
-        rc = cli.cmd_convert(args)
-
-    assert rc == 0
-    assert not mock_write_meta.called  # no meta.json when intermediates disabled
-    assert args.output.read_text(encoding="utf-8") == "hi"
-
-
 def test_cmd_convert_missing_pdf_returns_1(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -239,7 +196,7 @@ def test_cmd_convert_missing_pdf_returns_1(
     assert "input PDF not found" in err
 
 
-def test_cmd_convert_rejects_reformat_with_no_intermediates_rejected(tmp_path: Path) -> None:
+def test_cmd_convert_rejects_legacy_reformat_flag(tmp_path: Path) -> None:
     """Legacy --reformat removed: parser must reject the flag with a clear
     error so users see the new --no-cache-* family."""
     parser = cli.build_parser()
@@ -266,14 +223,14 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
     )
     layout = CacheLayout.for_pdf(tmp_path / ".pdf2md-agent-cache" / "in", pdf)
 
-    with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
-         patch.object(cli, "run_pipeline", return_value=[
+    with patch.object(pdf_renderer, "render_pdf", return_value=[page]) as mock_render, \
+         patch.object(pipeline, "make_vision_llm", return_value=object()), \
+         patch.object(pipeline, "run_pipeline", return_value=[
              PageResult(page_number=1, markdown="stitched body"),
          ]), \
-         patch.object(cli, "stitch_pages", return_value="stitched body") as mock_stitch, \
-         patch.object(cli, "atomic_write_text") as mock_atomic, \
-         patch.object(cli, "write_meta"):
+         patch.object(pipeline, "stitch_pages", return_value="stitched body") as mock_stitch, \
+         patch.object(pipeline, "atomic_write_text") as mock_atomic, \
+         patch.object(pipeline, "write_meta"):
         layout.pages_dir.mkdir(parents=True, exist_ok=True)
         from PIL import Image as _PIL
         _PIL.new("RGB", (72, 72), "white").save(layout.pages_dir / "page_0001.png", "PNG")
@@ -283,7 +240,6 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
             layout=layout,
             render_target=layout.pages_dir,
             resolved_pages=None,
-            keep_intermediates=True,
             retry_config=__import__(
                 "pdf2md_agent.llm_retry", fromlist=["RetryConfig"]
             ).RetryConfig(),

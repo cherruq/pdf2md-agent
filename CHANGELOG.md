@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `--no-cache-all` plus the per-resource `--no-cache-{render,text,resized,extract,format,summary}` flag family. Default semantics flipped: cache is trusted unless explicitly opted out. The single `CacheNoCacheFlags` dataclass (`src/pdf2md_agent/cache.py:CacheNoCacheFlags`) is the typed contract between CLI and runner.
 - `--request-timeout` CLI flag + `REQUEST_TIMEOUT_SECONDS` config (default 60s). Both the OpenAI SDK call and the runner's per-attempt guard share the value; a wall-clock overrun reclassifies the attempt as transient so the retry loop re-issues.
-- `--version` / `-V` flag that prints the package version (`pdf2md_agent.__about__.__version__`) and exits 0.
+- `--version` / `-V` flag that prints the package version (`pdf2md_agent.__version__`) and exits 0.
 - Meta fingerprint validation: `meta.json` now records `model` and `persona_version` (16-char SHA-256 of the active persona strings). A drift in any fingerprint field except `pages` refuses the run; a `pages`-only drift is informational (see Fixed).
 - Render-side cache reuse: `pdf2md_agent.render_skip` exposes `maybe_skip_render` / `maybe_skip_text` / `maybe_skip_resized`; the CLI consults them before calling `render_pdf`, so a follow-up run with the same `--dpi` skips the PyMuPDF re-render.
 - H1 sentinel: when a page falls back to the text layer, `extract.txt` is now written with a non-empty sentinel line (`(vision model unavailable for page N; ...)`) so `has_cached_extract` and downstream consumers can detect "this page has no real extractor output" instead of silently treating the empty file as success.
