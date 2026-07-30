@@ -165,8 +165,7 @@ def plan_for_image(
         persona_tokens: Estimated tokens for the agent persona + task
             system prompt (already pre-computed by the caller).
         fixed_text_tokens: Estimated tokens for the per-page variables:
-            running summary, optional text-hint, the rendered task
-            description scaffold.
+            optional text-hint and the rendered task description scaffold.
         image_path: Local path to the page PNG.
         target_long_side: Desired long-side after downscaling when budget
             allows; this is the "happy path" size.

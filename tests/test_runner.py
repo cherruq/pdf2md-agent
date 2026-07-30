@@ -78,7 +78,6 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
             results = run_pipeline(
                 pages=[page],
                 layout=layout,
-                with_summary=False,
                 no_cache=_no_cache(),
                 text_hint=False,
                 llm=object(),  # type: ignore[arg-type]
@@ -119,7 +118,6 @@ def test_run_pipeline_does_not_fall_back_for_permanent_errors(
                 run_pipeline(
                     pages=[page],
                     layout=layout,
-                    with_summary=False,
                     no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
@@ -151,7 +149,6 @@ def test_run_pipeline_propagates_when_fallback_disabled(
                 run_pipeline(
                     pages=[page],
                     layout=layout,
-                    with_summary=False,
                     no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
@@ -197,7 +194,6 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
             results = run_pipeline(
                 pages=[page],
                 layout=layout,
-                with_summary=False,
                 no_cache=_no_cache(),
                 text_hint=False,
                 llm=object(),  # type: ignore[arg-type]
@@ -238,7 +234,6 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
                 run_pipeline(
                     pages=[page],
                     layout=layout,
-                    with_summary=False,
                     no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]
@@ -279,7 +274,6 @@ def test_default_run_uses_strict_formatter(tmp_path: Path) -> None:
                 results = run_pipeline(
                     pages=[page],
                     layout=layout,
-                    with_summary=False,
                     no_cache=_no_cache(),
                     text_hint=False,
                     llm=object(),  # type: ignore[arg-type]

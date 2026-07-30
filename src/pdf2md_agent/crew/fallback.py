@@ -2,7 +2,18 @@
 
 When the vision model is unreachable after every retry, or when its output
 fails CrewAI's task-output validation, the runner emits a fenced
-text-layer Markdown stub instead of crashing the whole run.
+text-layer Markdown stub instead of crashing the whole run. This module
+isolates:
+
+* :func:`_text_layer_fallback` — build the stub markdown from the PDF's
+  native text layer for a single page.
+* :func:`_record_text_layer_fallback` — write the stub + a sentinel into
+  the page's extract/format artifacts and return a :class:`PageResult`.
+
+The sentinel text is owned by :mod:`pdf2md_agent.cache`
+(see :data:`pdf2md_agent.cache.FALLBACK_SENTINEL`); :func:`cache.has_cached_extract`
+guards against trusting that sentinel as a real extractor payload, so both
+this module and the cache must read the exact same prefix string.
 """
 from __future__ import annotations
 
