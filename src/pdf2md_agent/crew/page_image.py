@@ -122,8 +122,6 @@ def prepare_page_image(
     page: PageImage,
     layout: CacheLayout,
     text_hint_str: str,
-    summary: str,
-    max_summary_chars: int,
     ctx_limit: int,
     image_long_side: int,
     image_min_long_side: int,
@@ -133,19 +131,19 @@ def prepare_page_image(
     total: int,
     extractor_persona_text: str,
     phases: str,
+    **_kwargs: object,
 ) -> PreparedPage:
     """Plan and produce the image(s) the extractor should attach.
 
-    Estimates the per-call token cost (persona + per-page prompt + image
-    at its current size). If the result already fits the budget the
-    original page PNG is returned; otherwise the page is downscaled to a
-    JPEG copy under ``layout.pages_dir`` (or split into two tiles when
-    even the smallest allowed downscale won't fit).
+    The runner passes the exact same strings (`text_hint`, etc.)
+    that will eventually build the extract task. If the total text + image
+    tokens exceed `ctx_limit` * `token_budget_safety`, the image is iteratively
+    downscaled (binary search) until it fits. If it cannot fit even at
+    `image_min_long_side`, the layout falls back to tile splitting (!32).
     """
     persona_tokens = estimate_text_tokens(extractor_persona_text)
     description_for_budget = build_extract_description(
-        page.image_path, text_hint_str, summary,
-        max_summary_chars=max_summary_chars,
+        page.image_path, text_hint_str
     )
     fixed_text_tokens = estimate_text_tokens(description_for_budget)
     decision = plan_for_image(

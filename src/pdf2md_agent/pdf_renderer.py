@@ -58,7 +58,7 @@ def render_pdf(
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             png, text = _page_artifact_paths(output_dir, prefix, page_number)
             pix.save(png)
-            text.write_text(page.get_text("text"), encoding="utf-8")
+            text.write_text(page.get_text("text", sort=True), encoding="utf-8")
             pages_out.append(
                 PageImage(
                     page_number=page_number,

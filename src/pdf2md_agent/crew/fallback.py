@@ -53,7 +53,7 @@ def _text_layer_fallback(artifacts: PageArtifacts) -> str:
 class FallbackRecord:
     """Arguments bundled for :func:`_record_text_layer_fallback`.
 
-    Bundling the seven fields keeps the call sites readable; the runner
+    Bundling the fields keeps the call sites readable; the runner
     threads one of these through to the helper on every fallback path.
     """
 
@@ -62,7 +62,6 @@ class FallbackRecord:
     page_number: int
     page_started: float
     artifacts: PageArtifacts
-    summary: str
     completion_label: str
 
 
@@ -73,8 +72,8 @@ def _record_text_layer_fallback(
     page_number: int,
     page_started: float,
     artifacts: PageArtifacts,
-    summary: str,
     completion_label: str,
+    **_kwargs: object,
 ) -> PageResult:
     """Write the fallback artifacts for one page and return its :class:`PageResult`.
 
@@ -93,7 +92,6 @@ def _record_text_layer_fallback(
         page_number=page_number,
         page_started=page_started,
         artifacts=artifacts,
-        summary=summary,
         completion_label=completion_label,
     )
     format_md = _text_layer_fallback(record.artifacts)
@@ -112,7 +110,7 @@ def _record_text_layer_fallback(
         record.completion_label,
         f"{len(format_md):,}",
     )
-    return PageResult(record.page_number, format_md, record.summary)
+    return PageResult(record.page_number, format_md)
 
 
 __all__ = [

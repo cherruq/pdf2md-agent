@@ -1,8 +1,6 @@
 """Misc coverage: cache, pdf_renderer.read_page_text, runner._strip_think, CLI smoke."""
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import pymupdf
 import sys
@@ -13,17 +11,12 @@ import pytest
 
 from pdf2md_agent import cli
 from pdf2md_agent.cache import (
-    CacheCorruptedError,
     CacheLayout,
     is_page_complete,
-    read_summary,
-    write_summary,
 )
 from pdf2md_agent.cli_parser import _safe_intermediates_dir
 from pdf2md_agent.cli_parser import _safe_cache_stem
 from pdf2md_agent.cache import atomic_write_text as _atomic_write_text
-from pdf2md_agent.config import MODEL_NAME
-from pdf2md_agent.crew import agents
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
 from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
@@ -38,9 +31,7 @@ def test_cache_layout_for_pdf_creates_subdirs(tmp_path: Path) -> None:
     assert layout.root == root
     assert layout.pages_dir == root / "pages"
     assert layout.pages_dir.is_dir()
-    assert (root / "summary.json").parent == root
     assert layout.meta_path == root / "meta.json"
-    assert layout.summary_path == root / "summary.json"
 
 
 def test_cache_layout_artifacts_for_round_trip(tmp_path: Path) -> None:
@@ -64,42 +55,9 @@ def test_is_page_complete_true_when_both_outputs_exist(tmp_path: Path) -> None:
 def test_is_page_complete_false_when_one_output_missing(tmp_path: Path) -> None:
     layout = CacheLayout.for_pdf(tmp_path / "out", tmp_path / "x.pdf")
     layout.page_extract_path(2).write_text("extract", encoding="utf-8")
-    # format_markdown missing
     assert is_page_complete(layout, 2) is False
     layout.page_format_path(3).write_text("md", encoding="utf-8")
-    # extract missing
     assert is_page_complete(layout, 3) is False
-
-
-# --- read_summary / write_summary -----------------------------------------
-
-
-def test_read_summary_missing_returns_empty(tmp_path: Path) -> None:
-    assert read_summary(tmp_path / "nope.json") == ""
-
-
-def test_read_write_summary_round_trip(tmp_path: Path) -> None:
-    path = tmp_path / "summary.json"
-    write_summary(path, "running sum text 中文")
-    assert read_summary(path) == "running sum text 中文"
-
-
-def test_read_summary_corrupt_raises_and_warns(tmp_path: Path, caplog) -> None:
-    path = tmp_path / "summary.json"
-    path.write_text("{not json", encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
-        with pytest.raises(CacheCorruptedError):
-            read_summary(path)
-    assert any("unreadable" in rec.message for rec in caplog.records)
-
-
-def test_read_summary_wrong_shape_raises_and_warns(tmp_path: Path, caplog) -> None:
-    path = tmp_path / "summary.json"
-    path.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="pdf2md_agent.cache"):
-        with pytest.raises(CacheCorruptedError):
-            read_summary(path)
-    assert any("not a JSON object" in rec.message for rec in caplog.records)
 
 
 # --- pdf_renderer.read_page_text ------------------------------------------
@@ -160,33 +118,14 @@ def test_cli_parse_known_args() -> None:
     assert args.dpi == 144
     assert args.pages is None
     assert args.no_intermediates is False
-    assert args.no_summary is False
     assert args.no_text_hint is False
-    assert args.no_fallback_to_text is False
-    assert args.model == MODEL_NAME
-    assert args.persona_version == agents.PERSONA_VERSION
 
 
 def test_help_lists_argument_groups() -> None:
-    """The --help output must surface the four logical groups so users
-    can discover flags without reading the README."""
     parser = cli.build_parser()
     help_text = parser.format_help()
     for group in ("Pipeline", "Cache control", "Feature disable", "Retry & tuning"):
         assert group in help_text, f"missing help group: {group}"
-    assert "Diagnostic" in help_text
-
-
-def test_persona_version_hashes_active_personas() -> None:
-    joined = "\x00".join(
-        (
-            agents.EXTRACTOR_PERSONA,
-            agents.FORMATTER_PERSONA_STRICT,
-            agents.SUMMARIZER_PERSONA,
-        )
-    )
-    assert agents.PERSONA_VERSION == hashlib.sha256(joined.encode()).hexdigest()[:16]
-    assert "PERSONA_VERSION" in agents.__all__
 
 
 def test_cli_parse_pages_spec() -> None:
@@ -265,7 +204,6 @@ def test_atomic_write_creates_parent(tmp_path: Path) -> None:
 
 
 def test_atomic_write_mode_is_0o600_on_posix(tmp_path: Path) -> None:
-    """Verifies the new os.open(..., 0o600) path is exercised (D11-N01)."""
     import os
     p = tmp_path / "out.md"
     _atomic_write_text(p, "new")
@@ -330,27 +268,17 @@ def test_safe_cache_stem_no_suffix_off_windows() -> None:
     assert _safe_cache_stem("CON") == "CON"
 
 
-# --- meta fingerprint drift (BLOCKER 3/3 of PR #8) -----------------------
+# --- meta fingerprint drift ----------------------------------------------
 
 
-def test_meta_fingerprint_drift_refuses_run(tmp_path: Path, caplog, monkeypatch) -> None:
-    """A second run whose ``--dpi`` differs from the cached meta must be
-    refused with a non-zero exit and a clear stderr message. Regression:
-    PR #8 introduced ``read_meta`` / ``check_meta_matches`` but never
-    wired them into the CLI, so a DPI (or model / persona) drift would
-    happily re-use the stale cached outputs.
-    """
+def test_meta_fingerprint_drift_refuses_run(tmp_path: Path) -> None:
     from pdf2md_agent.cache import write_meta
 
     cache_root = tmp_path / "cache"
     layout = CacheLayout.for_pdf(cache_root, tmp_path / "input.pdf")
     write_meta(
         layout.meta_path,
-        pdf=tmp_path / "input.pdf",
-        dpi=144,
-        with_summary=True,
-        model="MiniMax-M3",
-        persona_version="0123456789abcdef",
+        pdf=tmp_path / "other-file.pdf",
     )
 
     pdf_path = tmp_path / "input.pdf"
@@ -373,34 +301,23 @@ def test_meta_fingerprint_drift_refuses_run(tmp_path: Path, caplog, monkeypatch)
         rc = cli.main([
             str(pdf_path),
             "-o", str(tmp_path / "out.md"),
-            "--dpi", "200",
             "--intermediates-dir", str(cache_root),
         ])
     assert rc == 1, "drift must refuse the run with exit code 1"
-    assert "dpi changed" in captured["stderr"]
+    assert "pdf changed" in captured["stderr"]
     assert "--no-cache-all" in captured["stderr"]
 
 
 def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
     tmp_path: Path,
 ) -> None:
-    """Regression: ``--no-cache-all`` opts every cache resource out, so
-    the meta.json fingerprint check must also be bypassed — otherwise
-    the runner hits a circular error the user can't escape.
-    """
     from pdf2md_agent.cache import read_meta, write_meta
 
     cache_root = tmp_path / "cache"
     layout = CacheLayout.for_pdf(cache_root, tmp_path / "input.pdf")
-    # Stale absolute path on disk — simulates the "cache from a prior
-    # cwd" pattern in the user's bug report.
     write_meta(
         layout.meta_path,
         pdf=tmp_path / "different-cwd" / "input.pdf",
-        dpi=144,
-        with_summary=True,
-        model="MiniMax-M3",
-        persona_version="0123456789abcdef",
     )
 
     pdf_path = tmp_path / "input.pdf"
@@ -418,86 +335,6 @@ def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
         ])
 
     assert rc == 0, "drift must NOT refuse the run when --no-cache-all is set"
-    # meta.json must now reflect the *current* pdf field — proves the
-    # fingerprint was actually rewritten for this run, not left stale.
     post = read_meta(layout.meta_path)
     assert post is not None
     assert Path(post.pdf) == pdf_path.resolve()
-
-
-def test_meta_fingerprint_pages_drift_is_warning_not_error(
-    tmp_path: Path,
-) -> None:
-    """Regression: a ``--pages`` subset change between runs must NOT hard-fail.
-
-    Per-page outputs are incrementally reused via file-existence checks, so
-    a wider cached page set is always safe to reuse — the missing pages get
-    processed regardless. The ``pages`` field of ``meta.json`` is treated as
-    informational and surfaces as a stderr warning, not a fatal drift.
-    Companions ``test_meta_fingerprint_drift_refuses_run`` and
-    ``test_meta_fingerprint_drift_bypassed_by_no_cache_all`` above already
-    prove every other fingerprint field still hard-fails.
-    """
-    from pdf2md_agent.cache import write_meta
-
-    pdf_path = _make_pdf(tmp_path / "input.pdf", pages=8)
-
-    cache_root = tmp_path / "cache"
-    layout = CacheLayout.for_pdf(cache_root, pdf_path)
-    # Simulate a previous full run (no --pages) — meta records pages=None.
-    # Use the CLI's own defaults for ``model`` / ``persona_version`` so the
-    # only drift reason is the intentional ``pages`` mismatch.
-    write_meta(
-        layout.meta_path,
-        pdf=pdf_path,
-        dpi=144,
-        with_summary=True,
-        pages=None,
-        model=MODEL_NAME,
-        persona_version=agents.PERSONA_VERSION,
-    )
-
-    captured: dict[str, str] = {"stderr": ""}
-
-    def _capture_print(*args, **kwargs) -> None:
-        if kwargs.get("file", None) is sys.stderr:
-            captured["stderr"] += (args[0] if args else "") + "\n"
-
-    with patch.object(cli, "_render_pages", return_value=[]), \
-         patch.object(cli, "make_vision_llm", return_value=object()), \
-         patch.object(cli, "run_pipeline", return_value=[]), \
-         patch.object(cli, "stitch_pages", return_value=""), \
-         patch("builtins.print", side_effect=_capture_print):
-        rc = cli.main([
-            str(pdf_path),
-            "-o", str(tmp_path / "out.md"),
-            "--dpi", "144",
-            "--pages", "1-3,7",
-            "--intermediates-dir", str(cache_root),
-        ])
-    assert rc == 0, (
-        f"pages drift must not hard-fail (rc={rc}); stderr={captured['stderr']!r}"
-    )
-    assert "warning: cache note: pages changed" in captured["stderr"]
-    assert "continuing" in captured["stderr"]
-    assert "error: cache invalid" not in captured["stderr"]
-    assert "fingerprint drift detected" not in captured["stderr"]
-
-
-def _make_pdf(path: Path, pages: int = 1) -> Path:
-    """Synthesize a minimal multi-page PDF for CLI page-resolution tests.
-
-    Mirror of ``tests/test_render_skip.py:_make_pdf``; duplicated locally to
-    keep ``test_misc_coverage.py`` free of inter-file dependencies.
-    """
-    doc = pymupdf.open()
-    try:
-        for _ in range(pages):
-            doc.new_page()
-        doc.save(str(path))
-    finally:
-        doc.close()
-    return path
-
-
-

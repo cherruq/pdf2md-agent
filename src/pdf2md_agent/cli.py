@@ -46,7 +46,6 @@ from pdf2md_agent.config import (
     IMAGE_JPEG_QUALITY,
     IMAGE_LONG_SIDE,
     IMAGE_MIN_LONG_SIDE,
-    MAX_SUMMARY_CHARS,
     REQUEST_TIMEOUT_SECONDS,
     TOKEN_BUDGET_SAFETY,
     resolve_ctx_limit,
@@ -143,9 +142,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
     if header_exit is not None:
         return header_exit
 
-    fallback_to_text = FALLBACK_TO_TEXT and not args.no_fallback_to_text
+    fallback_to_text = FALLBACK_TO_TEXT
     keep_intermediates = not args.no_intermediates
-    with_summary = not args.no_summary
     no_cache_flags = _resolve_no_cache_flags(args)
 
     resolved_pages, pages_exit = _resolve_requested_pages(args.pdf, args.pages)
@@ -161,7 +159,6 @@ def cmd_convert(args: argparse.Namespace) -> int:
         render_target=render_target,
         resolved_pages=resolved_pages,
         keep_intermediates=keep_intermediates,
-        with_summary=with_summary,
         retry_config=retry_config,
         fallback_to_text=fallback_to_text,
         started=time.monotonic(),
@@ -204,7 +201,6 @@ def _render_pages(
     layout = CacheLayout(
         root=render_target.parent,
         pages_dir=render_target,
-        summary_path=render_target.parent / "summary.json",
         meta_path=render_target.parent / "meta.json",
     )
 
@@ -240,7 +236,6 @@ def _run_pipeline(
     render_target: Path,
     resolved_pages: list[int] | None,
     keep_intermediates: bool,
-    with_summary: bool,
     retry_config: RetryConfig,
     fallback_to_text: bool,
     started: float,
@@ -252,7 +247,6 @@ def _run_pipeline(
     log.info("  dpi:             %d", args.dpi)
     log.info("  pages:           %s", "all" if resolved_pages is None else resolved_pages)
     log.info("  no-cache:        %s", no_cache.as_dict())
-    log.info("  cross-page:      %s", "summary" if with_summary else "independent")
     log.info("  text-hint:       %s", "on" if not args.no_text_hint else "off")
 
     if keep_intermediates:
@@ -265,53 +259,27 @@ def _run_pipeline(
             reasons = check_meta_matches(
                 existing_meta,
                 pdf=str(args.pdf.resolve()),
-                dpi=args.dpi,
-                with_summary=with_summary,
-                pages=resolved_pages,
-                model=args.model,
-                persona_version=args.persona_version,
             )
+            # ``pages`` is informational only: per-page outputs are
+            # reused via file-existence checks (``is_page_complete`` /
+            # ``maybe_skip_render``), so a wider cached page set is
+            # always safe to reuse. Only the missing pages get
+            # processed. All other fingerprint fields indicate real
+            # stale-output risk and must hard-fail.
             if reasons:
-                # ``pages`` is informational only: per-page outputs are
-                # reused via file-existence checks (``is_page_complete`` /
-                # ``maybe_skip_render``), so a wider cached page set is
-                # always safe to reuse. Only the missing pages get
-                # processed. All other fingerprint fields indicate real
-                # stale-output risk and must hard-fail.
-                warning_reasons = [
-                    r for r in reasons if r.startswith("pages changed:")
-                ]
-                fatal_reasons = [
-                    r for r in reasons if not r.startswith("pages changed:")
-                ]
-                for r in warning_reasons:
-                    print(
-                        f"warning: cache note: {r} "
-                        "(continuing; cached outputs reused, "
-                        "missing pages will be processed)",
-                        file=sys.stderr,
-                    )
-                if fatal_reasons:
-                    for r in fatal_reasons:
-                        print(f"error: cache invalid: {r}", file=sys.stderr)
-                    print(
-                        "error: meta.json fingerprint drift detected. "
-                        "re-run with --no-cache-all or wipe "
-                        f"{layout.root} to rebuild the cache.",
-                        file=sys.stderr,
-                    )
-                    return 1
+                for r in reasons:
+                    print(f"error: cache invalid: {r}", file=sys.stderr)
+                print(
+                    "error: meta.json fingerprint drift detected. "
+                    "re-run with --no-cache-all or wipe "
+                    f"{layout.root} to rebuild the cache.",
+                    file=sys.stderr,
+                )
+                return 1
         write_meta(
             layout.meta_path,
             pdf=args.pdf,
-            dpi=args.dpi,
-            with_summary=with_summary,
-            pages=resolved_pages,
-            model=args.model,
-            persona_version=args.persona_version,
         )
-        if not with_summary and layout.summary_path.exists():
-            layout.summary_path.unlink()
 
     log.info("rendering PDF to PNGs at %d dpi%s...", args.dpi, " (subset)" if resolved_pages else "")
     pages = _render_pages(
@@ -325,7 +293,7 @@ def _run_pipeline(
     )
     log.info("rendered %d page(s) to %s", len(pages), render_target)
 
-    log.info("running pipeline: extract + format%s", " + summarize" if with_summary else "")
+    log.info("running pipeline: extract + format")
     llm = make_vision_llm()
     log.info(
         "  retry:           max_attempts=%s, initial_delay=%.1fs, fibonacci, max_delay=%.1fs, jitter=±%.0f%%",
@@ -337,21 +305,18 @@ def _run_pipeline(
     log.info("  fallback:        %s", "text layer" if fallback_to_text else "off")
     image_long_side = args.image_long_side if args.image_long_side is not None else IMAGE_LONG_SIDE
     image_jpeg_quality = args.image_quality if args.image_quality is not None else IMAGE_JPEG_QUALITY
-    max_summary_chars = args.max_summary_chars if args.max_summary_chars is not None else MAX_SUMMARY_CHARS
     ctx_limit = args.ctx_limit if args.ctx_limit is not None else resolve_ctx_limit()
     log.info(
         "  budget:          ctx_limit=%d, safety=%.0f%%, image_long_side=%dpx, "
-        "image_q=%d, max_summary=%d chars",
+        "image_q=%d",
         ctx_limit,
         TOKEN_BUDGET_SAFETY * 100,
         image_long_side,
         image_jpeg_quality,
-        max_summary_chars,
     )
     results = run_pipeline(
         pages=pages,
         layout=layout,
-        with_summary=with_summary,
         no_cache=no_cache,
         text_hint=not args.no_text_hint,
         llm=llm,
@@ -361,7 +326,6 @@ def _run_pipeline(
         image_long_side=image_long_side,
         image_min_long_side=IMAGE_MIN_LONG_SIDE,
         image_jpeg_quality=image_jpeg_quality,
-        max_summary_chars=max_summary_chars,
         token_budget_safety=TOKEN_BUDGET_SAFETY,
         request_timeout_seconds=(
             args.request_timeout

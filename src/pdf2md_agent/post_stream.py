@@ -131,6 +131,15 @@ class StreamingStitcher:
                 else:
                     self._buffer = _smart_join(self._buffer, fragments[0])
                 fragments = fragments[1:]
+                if not fragments:
+                    # The joined content might continue on the next page;
+                    # keep it buffered until the next feed() call.
+                    return
+                # More blocks follow on the same page — the join is
+                # confirmed complete.  Yield it now so it isn't silently
+                # overwritten by the last-fragment buffer below.
+                yield self._buffer
+                self._buffer = ""
             else:
                 yield self._buffer
                 self._buffer = ""

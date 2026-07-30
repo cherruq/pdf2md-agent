@@ -19,7 +19,7 @@ from pdf2md_agent.post_stream import StitchMode, stitch_pages, StreamingStitcher
 # ---------- helpers ----------------------------------------------------------
 
 def _page(n: int, markdown: str) -> PageResult:
-    return PageResult(page_number=n, markdown=markdown, summary="")
+    return PageResult(page_number=n, markdown=markdown)
 
 
 def _drain(stitcher: StreamingStitcher, pages: list[str]) -> list[str]:
@@ -301,3 +301,73 @@ def test_latin_then_cjk_no_space() -> None:
     chunks.extend(stitcher.finalize())
     # CJK then Latin: no space (CJK has no word boundary)
     assert chunks == ["阶段A.3.6.1 describes"]
+
+
+# ---------- cross-page join with trailing blocks ----------------------------
+
+
+def test_cross_page_join_with_trailing_blocks_preserved() -> None:
+    """Regression: joined cross-page fragment must not be lost when more
+    blocks follow on the same page.
+
+    Reproduces the P04 loss scenario:
+    * Page 1 ends with an unfinished paragraph (P04 partial).
+    * Page 2 starts with the continuation, followed by P05, P06, P07.
+    * Without the fix, the joined P04 was silently overwritten by P07.
+    """
+    p1 = (
+        "【P01】First paragraph.\n\n"
+        "【P02】Second paragraph.\n\n"
+        "【P04-跨页验证】这一段专门承担跨页连续性测试，"
+    )
+    p2 = (
+        "既不重复页底已经出现的内容。\n\n"
+        "【P05】Another paragraph.\n\n"
+        "【P06】Yet another.\n\n"
+        "【P07】Last on this page."
+    )
+    out = stitch_pages([_page(1, p1), _page(2, p2)])
+    # P04 must survive the join — it must NOT be silently dropped.
+    assert "【P04-跨页验证】" in out, "P04 was silently dropped by the stitcher"
+    assert "这一段专门承担跨页连续性测试，既不重复页底已经出现的内容。" in out
+    # All other paragraphs must also be present.
+    assert "【P01】" in out
+    assert "【P02】" in out
+    assert "【P05】" in out
+    assert "【P06】" in out
+    assert "【P07】" in out
+
+
+def test_cross_page_join_only_continuation_stays_buffered() -> None:
+    """When the continuation is the only fragment on the next page, the
+    joined buffer stays held back (not yielded) until finalize().
+    """
+    stitcher = StreamingStitcher()
+    chunks = list(stitcher.feed("Unfinished sentence that"))
+    assert chunks == []  # held in buffer
+    chunks.extend(stitcher.feed("continues here."))
+    # Still only one fragment — joined, held in buffer
+    assert chunks == []
+    chunks.extend(stitcher.finalize())
+    assert chunks == ["Unfinished sentence that continues here."]
+
+
+def test_cross_page_table_join_with_trailing_blocks() -> None:
+    """Table continuation joined via unclosed-row must also not be lost
+    when more blocks follow on the same page.
+    """
+    p1 = (
+        "| A | B |\n"
+        "|---|---|\n"
+        "| 1 | 2"  # unclosed
+    )
+    p2 = (
+        "| 3 | 4 |\n\n"
+        "A regular paragraph after the table."
+    )
+    out = stitch_pages([_page(1, p1), _page(2, p2)])
+    # The table must survive, with the unclosed row closed.
+    assert "| 1 | 2 |" in out
+    assert "| 3 | 4 |" in out
+    # The trailing paragraph must also be present.
+    assert "A regular paragraph after the table." in out

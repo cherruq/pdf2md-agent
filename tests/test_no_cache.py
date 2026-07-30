@@ -1,13 +1,4 @@
-"""Tests for the ``--no-cache-*`` family and ``CacheNoCacheFlags`` plumbing.
-
-Maps the path-B contract:
-
-* ``--no-cache-all`` flips every per-resource flag.
-* Default = trust cache; all flags ``False``.
-* Per-page priority: format short-circuit → extract short-circuit → full
-  pipeline.
-* ``has_cached_extract`` rejects empty extract.txt (H1 sentinel).
-"""
+"""Tests for the ``--no-cache-*`` family and ``CacheNoCacheFlags`` plumbing."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -48,7 +39,6 @@ def _layout(tmp_path: Path, page_number: int) -> CacheLayout:
     return CacheLayout(
         root=tmp_path,
         pages_dir=pages_dir,
-        summary_path=tmp_path / "summary.json",
         meta_path=tmp_path / "meta.json",
     )
 
@@ -65,7 +55,6 @@ def test_no_cache_defaults_all_false() -> None:
     assert args.no_cache_resized is False
     assert args.no_cache_extract is False
     assert args.no_cache_format is False
-    assert args.no_cache_summary is False
 
 
 def test_no_cache_extract_individual_flag() -> None:
@@ -84,7 +73,6 @@ def test_no_cache_all_sets_every_flag() -> None:
     assert args.no_cache_resized is True
     assert args.no_cache_extract is True
     assert args.no_cache_format is True
-    assert args.no_cache_summary is True
 
 
 def test_resume_and_reformat_flags_rejected() -> None:
@@ -119,7 +107,7 @@ def test_cache_no_cache_flags_all_false_for_partial(flags: CacheNoCacheFlags) ->
 
 def test_cache_no_cache_flags_all_true_only_when_every_flag_set() -> None:
     assert CacheNoCacheFlags(
-        render=True, text=True, resized=True, extract=True, format=True, summary=True
+        render=True, text=True, resized=True, extract=True, format=True
     ).all() is True
 
 
@@ -141,12 +129,6 @@ def test_has_cached_extract_true_when_extract_nonempty(tmp_path: Path) -> None:
 def test_has_cached_extract_false_when_extract_is_fallback_sentinel(
     tmp_path: Path,
 ) -> None:
-    """Regression: the runner's text-layer fallback writes a NON-EMPTY
-    sentinel line into ``extract.txt`` so the file isn't silently trusted
-    as a real extractor payload. ``has_cached_extract`` must parse the
-    prefix and reject the sentinel; otherwise ``--no-cache-extract``
-    would feed the marker text into the formatter.
-    """
     from pdf2md_agent.crew.runner import _FALLBACK_SENTINEL
 
     layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "fake.pdf")
@@ -190,13 +172,11 @@ def test_no_cache_format_reruns_full_pipeline(
          patch.object(runner, "make_formatter"), \
          patch.object(runner, "make_extract_task", return_value=extract_t), \
          patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task"), \
          patch.object(runner, "Crew") as crew_cls:
         crew_cls.return_value.kickoff = _track
         results = run_pipeline(
             pages=[page],
             layout=layout,
-            with_summary=False,
             no_cache=CacheNoCacheFlags(format=True),
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
@@ -229,7 +209,6 @@ def test_no_cache_extract_runs_formatter_only(
 
     extract_t = _FakeTask(raw="unused")
     format_t = _FakeTask(raw="re-formatted md")
-    summarize_t = _FakeTask(raw="new summary")
 
     extractor_calls: list[object] = []
 
@@ -243,15 +222,12 @@ def test_no_cache_extract_runs_formatter_only(
 
     with patch.object(runner, "make_extractor", side_effect=_track_extractor), \
          patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_summarizer"), \
          patch.object(runner, "make_format_task_from_extract_file", return_value=format_t), \
-         patch.object(runner, "make_summarize_task", return_value=summarize_t), \
          patch.object(runner, "_output", side_effect=lambda t: getattr(t.output, "raw", "")), \
          patch.object(runner, "Crew", return_value=crew_obj):
         results = run_pipeline(
             pages=[page],
             layout=layout,
-            with_summary=True,
             no_cache=CacheNoCacheFlags(extract=True),
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
@@ -264,7 +240,6 @@ def test_no_cache_extract_runs_formatter_only(
     assert extractor_calls == [], "make_extractor must NOT run with --no-cache-extract"
     assert results[0].markdown == "re-formatted md"
     assert layout.page_format_path(1).read_text(encoding="utf-8") == "re-formatted md"
-    assert layout.summary_path.exists()
 
 
 def test_no_cache_extract_falls_through_when_extract_missing(
@@ -272,7 +247,6 @@ def test_no_cache_extract_falls_through_when_extract_missing(
 ) -> None:
     page = _page(1)
     layout = _layout(tmp_path, 1)
-    # No extract.txt on disk → must fall through to full pipeline.
 
     extract_t = _FakeTask(raw="fresh extract")
     format_t = _FakeTask(raw="fresh md")
@@ -281,13 +255,11 @@ def test_no_cache_extract_falls_through_when_extract_missing(
          patch.object(runner, "make_formatter"), \
          patch.object(runner, "make_extract_task", return_value=extract_t), \
          patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task"), \
          patch.object(runner, "Crew") as crew_cls:
         crew_cls.return_value.kickoff = lambda: None
         results = run_pipeline(
             pages=[page],
             layout=layout,
-            with_summary=False,
             no_cache=CacheNoCacheFlags(extract=True),
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
@@ -319,7 +291,6 @@ def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
         results = run_pipeline(
             pages=[page],
             layout=layout,
-            with_summary=False,
             no_cache=CacheNoCacheFlags(),
             text_hint=False,
             llm=object(),  # type: ignore[arg-type]
@@ -331,46 +302,3 @@ def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
 
     assert kickoff_calls == [], "trusting format.md must short-circuit the pipeline"
     assert results[0].markdown == "final md"
-
-
-def test_no_cache_summary_does_not_seed(tmp_path: Path) -> None:
-    page = _page(1)
-    layout = _layout(tmp_path, 1)
-    # Pre-existing summary.json must be ignored when --no-cache-summary is set.
-    layout.summary_path.write_text(
-        '{"summary": "stale carry-over"}', encoding="utf-8"
-    )
-
-    extract_t = _FakeTask(raw="new extract")
-    format_t = _FakeTask(raw="new md")
-    summarize_t = _FakeTask(raw="new summary text")
-
-    written: list[Path] = []
-
-    def _track_write(path: Path, _payload: str) -> None:
-        written.append(path)
-
-    with patch.object(runner, "write_summary", side_effect=_track_write), \
-         patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_summarizer"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "make_summarize_task", return_value=summarize_t), \
-         patch.object(runner, "Crew") as crew_cls:
-        crew_cls.return_value.kickoff = lambda: None
-        run_pipeline(
-            pages=[page],
-            layout=layout,
-            with_summary=True,
-            no_cache=CacheNoCacheFlags(summary=True),
-            text_hint=False,
-            llm=object(),  # type: ignore[arg-type]
-            retry_config=RetryConfig(
-                max_attempts=1, initial_delay=0.001, jitter=0.0
-            ),
-            fallback_to_text=True,
-        )
-
-    assert written == [], "summary.json must NOT be written when --no-cache-summary is set"
-    assert layout.summary_path.read_text(encoding="utf-8") == '{"summary": "stale carry-over"}'

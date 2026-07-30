@@ -5,23 +5,22 @@
 > vision API you point it at).
 
 `pdf2md-agent` renders each page of a PDF to an image, hands the image to a
-chain of small vision-language agents (extractor → formatter → running
-summarizer), and emits strict CommonMark Markdown that preserves the source
-language verbatim — including CJK content.
+chain of small vision-language agents (extractor → formatter), and emits
+strict CommonMark Markdown that preserves the source language verbatim —
+including CJK content.
 
 It is designed to be robust on adversarial inputs:
 
 - **Token-budgeted** — every per-page call is sized (and the page image
   downscaled) to stay under the model's context window.
 - **Retry-aware** — transient API failures retry with Fibonacci backoff
-  (1, 1, 2, 3, 5, 8, 13, …) × `--retry-initial-delay`, capped at
-  `--retry-max-delay` (default 900s / 15 min), + jitter; on retry exhaustion
+  (1, 1, 2, 3, 5, 8, 13, …), capped at 15 min + jitter; on retry exhaustion
   the page falls back to the PDF's native text layer (with a clearly-marked
   stub) instead of crashing the run.
-- **Resumable** — per-page outputs and the running summary are cached, so
-  re-running only fills in the pages that failed. Per-resource opt-outs
-  (`--no-cache-{render,text,resized,extract,format,summary}`) let you
-  invalidate a single resource without redoing the whole pipeline.
+- **Resumable** — per-page outputs are cached, so re-running only fills in
+  the pages that failed. Per-resource opt-outs
+  (`--no-cache-{render,text,resized,extract,format}`) let you invalidate
+  a single resource without redoing the whole pipeline.
 
 ## Table of contents
 
@@ -109,28 +108,13 @@ overrides the env value for the current invocation.
 | Variable | Default | Notes |
 |---|---|---|
 | `PDF2MD_AGENT_CTX_LIMIT` | _(auto)_ | Model context-window token limit. Unset ⇒ probed from `{OPENAI_BASE_URL}/models` (clamped to 1 048 576), or hardcoded for the active model if the probe fails. |
-| `PDF2MD_AGENT_TOKEN_BUDGET_SAFETY` | `0.85` | Fraction of `ctx_limit` the planner will spend per call. |
-| `PDF2MD_AGENT_IMAGE_LONG_SIDE` | `1536` | Long-side pixel cap for inlined page JPEGs. Lower ⇒ smaller payloads, worse OCR. |
-| `PDF2MD_AGENT_IMAGE_MIN_LONG_SIDE` | `768` | Lower bound for the binary search — never resize below this. |
-| `PDF2MD_AGENT_IMAGE_JPEG_QUALITY` | `85` | JPEG quality (1–100) used by the in-memory downscaler. |
-| `PDF2MD_AGENT_MAX_SUMMARY_CHARS` | `800` | Maximum running-summary size fed into the next extractor. |
 | `PDF2MD_AGENT_REQUEST_TIMEOUT` | `60` | Per-attempt wall-clock timeout in seconds (0.1–600). |
-
-### LLM retry / fallback
-
-| Variable | Default | Notes |
-|---|---|---|
 | `PDF2MD_AGENT_MAX_RETRIES` | `0` | Total LLM call attempts per page (initial + retries). `0` or unset = unlimited; positive integer = bounded budget. |
-| `PDF2MD_AGENT_RETRY_INITIAL_DELAY` | `1.0` | Initial retry delay in seconds (Fibonacci base unit). Must be `> 0`; zero or negative is rejected to avoid a busy-spin loop. |
-| `PDF2MD_AGENT_RETRY_MAX_DELAY` | `900.0` | Per-attempt delay cap (seconds). Fibonacci growth clamps at this ceiling. |
-| `PDF2MD_AGENT_RETRY_JITTER` | `0.25` | Jitter ratio in `[0.0, 1.0]`. |
-| `PDF2MD_AGENT_FALLBACK_TO_TEXT` | `true` | If `true`, fall back to the PDF's native text layer on retry exhaustion; if `false`, raise. |
 
-Retry delays follow the Fibonacci sequence (1, 1, 2, 3, 5, 8, 13, …) scaled
-by `PDF2MD_AGENT_RETRY_INITIAL_DELAY`, capped at `PDF2MD_AGENT_RETRY_MAX_DELAY`
-(seconds) per attempt. With the default unlimited setting (`0`), transient
-failures are retried forever; non-transient failures (4xx) always propagate
-immediately.
+Retry delays follow the Fibonacci sequence (1, 1, 2, 3, 5, 8, 13, …),
+capped at 900 seconds per attempt. With the default unlimited setting (`0`),
+transient failures are retried forever; non-transient failures (4xx) always
+propagate immediately.
 
 ### Pointing at a different provider
 
@@ -172,13 +156,11 @@ pdf2md-agent PDF -o OUTPUT [options]
 | `--no-cache-resized` | flag | off | Re-resize the downscaled JPEG when needed. |
 | `--no-cache-extract` | flag | off | Re-run the extractor; cached `extract.txt` is ignored. |
 | `--no-cache-format` | flag | off | Re-run the formatter; cached `format.md` is ignored. |
-| `--no-cache-summary` | flag | off | Ignore `summary.json`; start the running summary fresh. |
-| `--no-cache-all` | flag | off | Equivalent to all six `--no-cache-*` flags above. |
+| `--no-cache-all` | flag | off | Equivalent to all five `--no-cache-*` flags above. |
 
 ### Feature disable
 | Flag | Type | Default | Notes |
 |---|---|---|---|
-| `--no-summary` | flag | off | Process each page independently; deletes any pre-existing `summary.json`. |
 | `--no-text-hint` | flag | off | Don't feed the PDF's native text layer to the extractor. |
 | `--no-fallback-to-text` | flag | off | On retry exhaustion, raise instead of falling back. |
 | `--stitch-mode` | `off` \| `heuristic` | `heuristic` | Heuristic (default) merges page splits; `off` keeps the legacy `\n\n---\n\n` separator. |
@@ -186,22 +168,15 @@ pdf2md-agent PDF -o OUTPUT [options]
 ### Retry & tuning
 | Flag | Type | Default | Notes |
 |---|---|---|---|
-| `--max-retries` | int ≥ 1 | `4` | Total LLM attempts per page. |
-| `--retry-initial-delay` | float | `1.0` | Initial backoff delay (seconds). |
-| `--retry-backoff` | float | `2.0` | Backoff multiplier. |
-| `--retry-max-delay` | float | `30.0` | Per-attempt delay cap. |
-| `--retry-jitter` | float in `[0, 1]` | `0.25` | Jitter ratio. |
+| `--max-retries` | int ≥ 1 | `0` | Total LLM attempts per page (`0` = unlimited). |
 | `--image-long-side` | int ≥ 64 | `1536` | Long-side cap (px) for inlined page JPEGs. |
 | `--image-quality` | int 1-100 | `85` | JPEG quality. 75-95 is the practical sweet spot. |
-| `--max-summary-chars` | int ≥ 100 | `800` | Running-summary character cap. |
-| `--ctx-limit` | int ≥ 256 | _(auto)_ | Model context-window token limit. Overrides `PDF2MD_AGENT_CTX_LIMIT`. |
+| `--ctx-limit` | int ≥ 256 | _(auto)_ | Model context-window token limit. |
 | `--request-timeout` | float 0.1-600 | `60.0` | Per-attempt wall-clock timeout. |
 
 ### Diagnostic
 | Flag | Type | Default | Notes |
 |---|---|---|---|
-| `--model` | string | `PDF2MD_AGENT_MODEL` | Model name recorded in `meta.json` for fingerprint validation. |
-| `--persona-version` | string | `PERSONA_VERSION` | Persona fingerprint (16-char hex) recorded in `meta.json`. |
 | `--version` / `-V` | flag | off | Print the package version and exit. |
 
 ## How it works
@@ -222,10 +197,6 @@ pdf2md-agent PDF -o OUTPUT [options]
                 │  ② Formatter   (text)                        │
                 │     rewrites the extract into strict         │
                 │     CommonMark, drops OCR noise.             │
-                │                                              │
-                │  ③ Summarizer  (text, optional)              │
-                │     maintains a tight rolling summary fed    │
-                │     into the next page's extractor.          │
                 └──────────────────────────────────────────────┘
                           │
                           ▼  (StreamingStitcher: heuristic merge + drop `\n\n---\n\n`)
@@ -237,7 +208,7 @@ pdf2md-agent PDF -o OUTPUT [options]
 Each extract call is sized by `pdf2md_agent.image_budget.plan_for_image` (re-exported via `pdf2md_agent.token_budget`):
 
 1. Estimate the token cost of the **persona** + the **per-page prompt
-   variables** (running summary, text-hint, render scaffold).
+   variables** (text-hint, render scaffold).
 2. Estimate the cost of the **image** at its current size (only the file's
    size is read — pixels are never decoded by the estimator).
 3. If the sum exceeds `ctx_limit * safety`, find the **largest**
@@ -282,8 +253,7 @@ When `--intermediates` is on (the default) the runner writes:
 
 ```
 .pdf2md-agent-cache/<stem-or-sha256[:16] of abs path>/
-├── meta.json                  # pdf, dpi, with_summary, pages, model, persona_version
-├── summary.json               # last running summary
+├── meta.json                  # pdf path fingerprint
 └── pages/
     ├── page_0001.png          # source render
     ├── page_0001_text.txt     # PDF native text layer
@@ -314,15 +284,9 @@ key = stem if (len(stem) <= 60 and '/' not in stem) else hashlib.sha256(str(pdf)
 cache_dir = f".pdf2md-agent-cache/{key}/"
 ```
 
-`meta.json` carries a 6-field fingerprint (`pdf`, `dpi`, `with_summary`,
-`pages`, `model`, `persona_version`). On every page the runner compares
-the on-disk fingerprint with the current run's configuration. A drift in
-`pdf`, `dpi`, `with_summary`, `model`, or `persona_version` forces a
-re-run; a drift in `pages` alone is informational and surfaces as a
-stderr warning, because per-page outputs are reused incrementally via
-file-existence checks regardless. The persona version is the 16-char
-SHA-256 of the active persona strings, so a text change in any
-(extractor / formatter / summarizer) persona invalidates the cache.
+`meta.json` carries a simple fingerprint (`pdf`). On every run the
+runner compares the on-disk PDF realpath with the current run's file path.
+A drift forces a re-run on that directory.
 
 Per-resource opt-outs:
 
@@ -331,17 +295,11 @@ Per-resource opt-outs:
 - `--no-cache-text` — re-extract the text layer.
 - `--no-cache-resized` — re-resize the downscaled JPEG.
 - `--no-cache-extract` — re-run the extractor. The cached `extract.txt`
-  is ignored, but the formatter / summarizer still trust their own
-  cache (unless those flags are set).
+  is ignored, but the formatter still trusts its own cache (unless that
+  flag is set).
 - `--no-cache-format` — re-run the formatter. When the cached
   `format.md` is missing the runner falls through to the full pipeline.
-- `--no-cache-summary` — start the running summary fresh (no
-  `summary.json` pre-seed).
 - `--no-cache-all` — sets every per-resource flag.
-
-`--no-summary` removes any pre-existing `summary.json` at the start of
-the run so a previous cross-page run does not leak into a
-single-page-style run.
 
 Use `--no-intermediates` for ephemeral runs (writes go to a tempdir).
 
@@ -360,8 +318,6 @@ limit is auto-detected at startup (probe `/v1/models` → hardcoded
 fallback per model). If you're still hitting the limit:
 
 - Lower `--image-long-side` (e.g. 1024) or `--image-quality` (e.g. 70).
-- Lower `--max-summary-chars` — the running summary is the largest
-  variable token cost per call.
 - Check the startup log for the resolved `ctx_limit` value — the probe
   only reads fields named `context_window` / `max_context_tokens` /
   `max_input_tokens` / `context_length` / `max_tokens` /
@@ -424,11 +380,11 @@ src/pdf2md_agent/
 ├── post_stream_decision.py # block split + continuation + smart join + CJK detection
 ├── post_stream_table.py    # table-row continuation + header dedup
 └── crew/
-    ├── agents.py           # extractor / formatter / summarizer personas
+    ├── agents.py           # extractor / formatter personas
     ├── tasks.py            # build_extract_description + factory functions
     ├── multimodal_patch.py # AddImageTool monkey-patch
     ├── runner.py           # per-page pipeline orchestrator
-    ├── extraction.py       # extract → format → reflect → summarize loop
+    ├── extraction.py       # extract → format → reflect loop
     ├── page_image.py       # token-budget planning + tiling + downscale
     ├── fallback.py         # text-layer fallback helpers + sentinel
     ├── output.py           # _strip_think + _output (CrewAI task output cleanup)
@@ -446,7 +402,7 @@ pytest -ra tests/
 | Test file | Covers |
 |---|---|
 | `test_cache.py` | `CacheLayout`, `MetaInfo`, fingerprint read/match, atomic writes |
-| `test_no_cache.py` | `--no-cache-*` flag family, per-page priority, summary seed |
+| `test_no_cache.py` | `--no-cache-*` flag family, per-page priority |
 | `test_render_skip.py` | Render-side cache reuse (PNG / text / resized) |
 | `test_pages.py` | `parse_page_spec`, `resolve_pages` |
 | `test_pdf_renderer.py` | `render_pdf` shape, PNG + text-layer emit |

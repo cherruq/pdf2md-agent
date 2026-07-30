@@ -11,7 +11,7 @@
    configured model, and the API-key guard.
 3. **Token budget + image downscale** (``TOKEN_BUDGET_SAFETY``,
    ``IMAGE_LONG_SIDE``, ``IMAGE_JPEG_QUALITY``, ``IMAGE_MIN_LONG_SIDE``,
-   ``MAX_SUMMARY_CHARS``, :func:`resolve_ctx_limit`) — knobs the
+   :func:`resolve_ctx_limit`) — knobs the
    per-call planner reads.
 4. **LLM retry + fallback** (``RETRY_*``, ``FALLBACK_TO_TEXT``) —
    knobs the retry/backoff layer reads.
@@ -44,35 +44,7 @@ def _env(name: str, default: str = "") -> str:
     return value.strip() if value else default
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = _env(name)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = _env(name)
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a number, got {raw!r}") from exc
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = _env(name).lower()
-    if not raw:
-        return default
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be a boolean (1/0/true/false/yes/no/on/off), got {raw!r}")
+# Only essential environment helper utilities retained for core config items.
 
 
 def _env_int_or_unlimited(name: str) -> int | None:
@@ -201,11 +173,10 @@ def resolve_ctx_limit() -> int:
     return _DEFAULT_CTX_LIMIT
 
 
-TOKEN_BUDGET_SAFETY: Final[float] = _env_float("PDF2MD_AGENT_TOKEN_BUDGET_SAFETY", 0.85)
-IMAGE_LONG_SIDE: Final[int] = _env_int("PDF2MD_AGENT_IMAGE_LONG_SIDE", 1536)
-IMAGE_JPEG_QUALITY: Final[int] = _env_int("PDF2MD_AGENT_IMAGE_JPEG_QUALITY", 85)
-IMAGE_MIN_LONG_SIDE: Final[int] = _env_int("PDF2MD_AGENT_IMAGE_MIN_LONG_SIDE", 768)
-MAX_SUMMARY_CHARS: Final[int] = _env_int("PDF2MD_AGENT_MAX_SUMMARY_CHARS", 800)
+TOKEN_BUDGET_SAFETY: Final[float] = 0.85
+IMAGE_LONG_SIDE: Final[int] = 1536
+IMAGE_JPEG_QUALITY: Final[int] = 85
+IMAGE_MIN_LONG_SIDE: Final[int] = 768
 
 REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
     "PDF2MD_AGENT_REQUEST_TIMEOUT", 60.0
@@ -213,17 +184,16 @@ REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
 
 
 # --- LLM retry + fallback ---------------------------------------------------
-# Defaults: unlimited transient retries with Fibonacci backoff (per-attempt
-# delay capped at 15 min). Set PDF2MD_AGENT_MAX_RETRIES (or pass
-# --max-retries) to a positive integer to bound the budget.
+# Defaults: unlimited transient retries with Fibonacci backoff.
+# Set PDF2MD_AGENT_MAX_RETRIES (or pass --max-retries) to a positive integer to bound the budget.
 
 RETRY_MAX_ATTEMPTS: Final[int | None] = _env_int_or_unlimited(
     "PDF2MD_AGENT_MAX_RETRIES"
 )
-RETRY_INITIAL_DELAY: Final[float] = _env_float("PDF2MD_AGENT_RETRY_INITIAL_DELAY", 1.0)
-RETRY_MAX_DELAY: Final[float] = _env_float("PDF2MD_AGENT_RETRY_MAX_DELAY", 900.0)
-RETRY_JITTER: Final[float] = _env_float("PDF2MD_AGENT_RETRY_JITTER", 0.25)
-FALLBACK_TO_TEXT: Final[bool] = _env_bool("PDF2MD_AGENT_FALLBACK_TO_TEXT", True)
+RETRY_INITIAL_DELAY: Final[float] = 1.0
+RETRY_MAX_DELAY: Final[float] = 900.0
+RETRY_JITTER: Final[float] = 0.25
+FALLBACK_TO_TEXT: Final[bool] = True
 
 
 __all__ = [
@@ -231,7 +201,6 @@ __all__ = [
     "IMAGE_JPEG_QUALITY",
     "IMAGE_LONG_SIDE",
     "IMAGE_MIN_LONG_SIDE",
-    "MAX_SUMMARY_CHARS",
     "MODEL_NAME",
     "OPENAI_BASE_URL",
     "REQUEST_TIMEOUT_SECONDS",

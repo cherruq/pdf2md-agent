@@ -143,7 +143,6 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         pages=None,
         no_intermediates=False,
         intermediates_dir=None,
-        no_summary=False,
         no_text_hint=False,
         no_fallback_to_text=False,
         no_cache_render=False,
@@ -151,7 +150,6 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         no_cache_resized=False,
         no_cache_extract=False,
         no_cache_format=False,
-        no_cache_summary=False,
         no_cache_all=False,
         max_retries=None,
         retry_initial_delay=None,
@@ -159,12 +157,10 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         retry_jitter=None,
         image_long_side=None,
         image_quality=None,
-        max_summary_chars=None,
         ctx_limit=None,
         stitch_mode="heuristic",
         request_timeout=None,
-        model=agents.PERSONA_VERSION,
-        persona_version=agents.PERSONA_VERSION,
+        model="MiniMax-M3",
     )
 
 
@@ -188,7 +184,7 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
          patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[
-             PageResult(page_number=1, markdown="# Title\n\n- item\n", summary="summary line"),
+             PageResult(page_number=1, markdown="# Title\n\n- item\n"),
          ]) as mock_run, \
          patch.object(cli, "stitch_pages", return_value="# Title\n\n- item\n") as mock_stitch, \
          patch.object(cli, "write_meta") as mock_write_meta:
@@ -221,7 +217,7 @@ def test_cmd_convert_no_intermediates_does_not_emit_meta(
     with patch.object(cli, "render_pdf", return_value=[page]), \
          patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[
-             PageResult(page_number=1, markdown="hi", summary=""),
+             PageResult(page_number=1, markdown="hi"),
          ]), \
          patch.object(cli, "stitch_pages", return_value="hi"), \
          patch.object(cli, "write_meta") as mock_write_meta:
@@ -273,7 +269,7 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
     with patch.object(cli, "render_pdf", return_value=[page]) as mock_render, \
          patch.object(cli, "make_vision_llm", return_value=object()), \
          patch.object(cli, "run_pipeline", return_value=[
-             PageResult(page_number=1, markdown="stitched body", summary=""),
+             PageResult(page_number=1, markdown="stitched body"),
          ]), \
          patch.object(cli, "stitch_pages", return_value="stitched body") as mock_stitch, \
          patch.object(cli, "atomic_write_text") as mock_atomic, \
@@ -288,7 +284,6 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
             render_target=layout.pages_dir,
             resolved_pages=None,
             keep_intermediates=True,
-            with_summary=False,
             retry_config=__import__(
                 "pdf2md_agent.llm_retry", fromlist=["RetryConfig"]
             ).RetryConfig(),
@@ -371,13 +366,12 @@ def test_record_text_layer_fallback_writes_extract_and_format(tmp_path: Path) ->
 
     result = _record_text_layer_fallback(
         idx=1, total=1, page_number=1, page_started=0.0,
-        artifacts=artifacts, summary="prior summary",
+        artifacts=artifacts,
         completion_label="fallback",
     )
 
     assert isinstance(result, PageResult)
     assert result.page_number == 1
-    assert result.summary == "prior summary"
     assert "vision model unavailable" in result.markdown
     extract_text = artifacts.extract_text.read_text(encoding="utf-8")
     assert "vision model unavailable" in extract_text
@@ -386,15 +380,14 @@ def test_record_text_layer_fallback_writes_extract_and_format(tmp_path: Path) ->
 
 
 def test_record_text_layer_fallback_returns_consistent_page_result(tmp_path: Path) -> None:
-    """``PageResult`` shape preserves page_number and the (unchanged) summary."""
+    """``PageResult`` shape preserves page_number."""
     artifacts = _make_page_artifacts(tmp_path, 7, "page 7 text\n")
     result = _record_text_layer_fallback(
         idx=7, total=10, page_number=7, page_started=0.0,
-        artifacts=artifacts, summary="carry-over summary 中文",
+        artifacts=artifacts,
         completion_label="validation-fallback",
     )
     assert result.page_number == 7
-    assert result.summary == "carry-over summary 中文"
 
 
 # ===========================================================================
