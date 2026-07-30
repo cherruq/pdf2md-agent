@@ -1,4 +1,4 @@
-"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs, running summary.
+"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs.
 
 The cache layer is split into three cohesive concerns:
 

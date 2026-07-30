@@ -1,7 +1,24 @@
 """Per-page CrewAI pipeline orchestrator.
 
-This module is the *coordinator*. It threads the cache layout and the per-page outputs
+This module is the *coordinator*. It does not run CrewAI itself, plan
+image budgets, or build fallback markdown — those live in
+:mod:`pdf2md_agent.crew.extraction`,
+:mod:`pdf2md_agent.crew.page_image`, and
+:mod:`pdf2md_agent.crew.fallback` respectively. The runner's job is to
+thread the cache layout and the per-page outputs
 through extraction helpers in document order.
+
+The three short-circuit paths the runner handles directly:
+
+* **format trust** (``is_page_complete``): ``--no-cache-format`` unset
+  AND ``format.md`` + ``extract.txt`` already on disk → return cached
+  markdown verbatim, no LLM call.
+* **extract re-format** (``--no-cache-extract``): cached ``extract.txt``
+  exists and ``format.md`` is to be regenerated → run only the formatter
+  on the cached extract, skipping the vision call entirely.
+* **full pipeline**: run extract → format for
+  the page; on retry exhaustion or validation error fall back to the
+  PDF's text layer.
 """
 from __future__ import annotations
 
@@ -71,7 +88,22 @@ def _run_format_only(
     request_timeout_seconds: float | None = None,
     **_kwargs: object,
 ) -> tuple[str, bool]:
-    """Run formatter without the extractor for cached extract.txt."""
+    """Run formatter without the extractor.
+
+    Used by the ``--no-cache-extract`` short-circuit: when the runner
+    trusts the cached ``extract.txt`` but needs a fresh formatter pass
+    (e.g. a resume-after-failure retry). The format task's description
+    inlines the on-disk extract.txt content as a fenced block, matching
+    the text-hint seam.
+
+    On retry exhaustion with ``fallback_to_text=True``, the cached
+    ``extract.txt`` is written through unchanged as the new ``format.md``
+    (the natural analogue of "fallback to text layer" for a page that
+    never ran the extractor). With ``fallback_to_text=False`` the exception
+    propagates.
+
+    Returns ``(format_md, did_fallback)``.
+    """
     formatter = make_formatter(llm)
     format_t = make_format_task_from_extract_file(formatter, artifacts.extract_text)
     tasks = [format_t]

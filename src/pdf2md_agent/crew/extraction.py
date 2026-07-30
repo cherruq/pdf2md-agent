@@ -37,7 +37,12 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 @dataclass(frozen=True, slots=True)
 class ExtractionOutcome:
-    """Result of one page's extraction loop."""
+    """Result of one page's extraction loop.
+
+    * ``succeeded`` contains the final Markdown output.
+    * ``fell_back`` is true if the vision model failed (+ retries exhausted)
+      and the returned Markdown is the native text-layer fallback stub.
+    """
 
     succeeded: bool
     fell_back: bool
@@ -134,6 +139,12 @@ def _maybe_reflect(
     coverage_text_hint: str,
     reflection_attempts: int,
 ) -> tuple[bool, str]:
+    """Evaluate extraction coverage against the text hint and possibly reflect.
+
+    If the extraction dropped significant text present in the PDF text
+    layer, return a penalty prompt instructing the model to fix the
+    omissions. If coverage is acceptable, return an empty string.
+    """
     if reflection_attempts >= _REFLECTION_MAX_ATTEMPTS:
         return False, ""
 
@@ -175,7 +186,13 @@ def run_extraction_loop(
     fallback_to_text: bool = True,
     **_kwargs: object,
 ) -> ExtractionOutcome:
-    """Run extract → format → (reflect) for one page."""
+    """Run extract → format → (reflect) for one page.
+
+    Retries are handled by ``call_with_retry`` around ``crew.kickoff()``.
+    If the vision LLM is completely unreachable or refuses to output valid
+    JSON matching the task schema, the fallback logic kicks in and emits a
+    text-layer stub so the run can survive transient provider outages.
+    """
     extractor = _runner.make_extractor(llm)
     formatter = _runner.make_formatter(llm)
 
