@@ -9,7 +9,6 @@ Flat directory; one module-level test file per source module. No `conftest.py`, 
 | `src/pdf2md_agent/cache.py` | `test_cache.py` |
 | `src/pdf2md_agent/cli.py` & `pipeline.py` | `test_misc_coverage.py`, `test_d8_coverage.py` |
 | `src/pdf2md_agent/config.py` | `test_config.py` |
-| `src/pdf2md_agent/ctx_probe.py` | `test_ctx_probe.py` |
 | `src/pdf2md_agent/llm_retry.py` | `test_llm_retry.py` |
 | `src/pdf2md_agent/pages.py` | `test_pages.py` |
 | `src/pdf2md_agent/pdf_renderer.py` | `test_pdf_renderer.py` |
@@ -24,7 +23,7 @@ Flat directory; one module-level test file per source module. No `conftest.py`, 
 ```bash
 uv run pytest                    # full suite (no API calls)
 uv run pytest -ra tests/         # CI-equivalent: summary, no passed lines
-uv run pytest tests/test_runner.py -k extract_then_format -v   # single test
+uv run pytest tests/test_runner.py -k falls_back -v   # single test
 ```
 
 `pyproject.toml` `[tool.pytest.ini_options]`: `pythonpath = ["src"]`, `testpaths = ["tests"]`, `addopts = ["-ra"]`.
@@ -32,7 +31,7 @@ uv run pytest tests/test_runner.py -k extract_then_format -v   # single test
 ## MOCKING STRATEGY
 
 - **Patch where the name is looked up**, not where it is defined. Use `patch.object(runner, "make_extractor")`, `patch.object(runner, "Crew")`, etc. — never patch the original `pdf2md_agent.vision.make_vision_llm` directly.
-- LLM/Crew mocking: `patch.object(runner, "make_extractor")`, `patch.object(runner, "make_formatter")`, `patch.object(runner, "make_extract_task", return_value=extract_t)`. Make `Crew.kickoff` a `lambda: None` or a side-effect that returns the canned extractor output.
+- LLM/Crew mocking: `patch.object(runner, "make_extractor")`, `patch.object(runner, "make_extract_task", return_value=extract_t)`. Make `Crew.kickoff` a `lambda: None` or a side-effect that returns the canned extractor output.
 - Config / env manipulation: `monkeypatch.setattr(config, "OPENAI_BASE_URL", ...)` or `monkeypatch.setenv(...)`.
 - Atomic-write crash simulation: `monkeypatch.setattr("os.write", crash_after_open)`.
 - CWD-sensitive cache path tests: `monkeypatch.chdir(tmp_path)`.

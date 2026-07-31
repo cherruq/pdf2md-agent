@@ -5,7 +5,7 @@
 > vision API you point it at).
 
 `pdf2md-agent` renders each page of a PDF to an image, hands the image to a
-chain of small vision-language agents (extractor → formatter), and emits
+vision-language extraction agent, and emits
 strict CommonMark Markdown that preserves the source language verbatim —
 including CJK content.
 
@@ -19,7 +19,7 @@ It is designed to be robust on adversarial inputs:
   stub) instead of crashing the run.
 - **Resumable** — per-page outputs are cached, so re-running only fills in
   the pages that failed. Per-resource opt-outs
-  (`--no-cache-{render,text,resized,extract,format}`) let you invalidate
+  (`--no-cache-{render,text,resized,format}`) let you invalidate
   a single resource without redoing the whole pipeline.
 
 ## Table of contents
@@ -84,9 +84,6 @@ pdf2md-agent input.pdf -o output.md --dpi 200
 
 # Bypass every cache resource for a one-shot full re-run
 pdf2md-agent input.pdf -o output.md --no-cache-all
-
-# Re-format a previously-extracted page (strict CommonMark only)
-pdf2md-agent input.pdf -o output.md --no-cache-extract
 ```
 
 ## Configuration
@@ -107,7 +104,7 @@ overrides the env value for the current invocation.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `PDF2MD_AGENT_CTX_LIMIT` | _(auto)_ | Model context-window token limit. Unset ⇒ probed from `{OPENAI_BASE_URL}/models` (clamped to 1 048 576), or hardcoded for the active model if the probe fails. |
+| `PDF2MD_AGENT_CTX_LIMIT` | _(auto)_ | Model context-window token limit. Unset ⇒ hardcoded default for the active model (e.g. 524288 for MiniMax-M3), or 128000 fallback if unknown. |
 | `PDF2MD_AGENT_REQUEST_TIMEOUT` | `60` | Per-attempt wall-clock timeout in seconds (0.1–600). |
 | `PDF2MD_AGENT_MAX_RETRIES` | `0` | Total LLM call attempts per page (initial + retries). `0` or unset = unlimited; positive integer = bounded budget. |
 
@@ -154,9 +151,8 @@ pdf2md-agent PDF -o OUTPUT [options]
 | `--no-cache-render` | flag | off | Re-render PNGs even when on disk. |
 | `--no-cache-text` | flag | off | Re-extract the text layer even when on disk. |
 | `--no-cache-resized` | flag | off | Re-resize the downscaled JPEG when needed. |
-| `--no-cache-extract` | flag | off | Re-run the extractor; cached `extract.txt` is ignored. |
-| `--no-cache-format` | flag | off | Re-run the formatter; cached `format.md` is ignored. |
-| `--no-cache-all` | flag | off | Equivalent to all five `--no-cache-*` flags above. |
+| `--no-cache-format` | flag | off | Re-run the extraction to regenerate cached `format.md`. |
+| `--no-cache-all` | flag | off | Equivalent to all four `--no-cache-*` flags above. |
 
 ### Feature disable
 | Flag | Type | Default | Notes |
@@ -188,15 +184,11 @@ pdf2md-agent PDF -o OUTPUT [options]
                           │
                           ▼
                 ┌──────────────────────────────────────────────┐
-                │ Per-page CrewAI crew (extract → format → …)  │
+                │ Per-page CrewAI extraction crew              │
                 │                                              │
                 │  ① Extractor   (multimodal)                  │
-                │     transcribes the page image into raw      │
-                │     markdown, preserving CJK + layout.       │
-                │                                              │
-                │  ② Formatter   (text)                        │
-                │     rewrites the extract into strict         │
-                │     CommonMark, drops OCR noise.             │
+                │     transcribes the page image into strict   │
+                │     CommonMark, preserving CJK + layout.     │
                 └──────────────────────────────────────────────┘
                           │
                           ▼  (StreamingStitcher: heuristic merge + drop `\n\n---\n\n`)
@@ -258,7 +250,6 @@ When `--intermediates` is on (the default) the runner writes:
     ├── page_0001.png          # source render
     ├── page_0001_text.txt     # PDF native text layer
     ├── page_0001_resized.jpg  # downscaled JPEG (if needed)
-    ├── page_0001_extract.txt  # raw extractor output
     └── page_0001_format.md    # final CommonMark output
 ```
 
@@ -294,11 +285,8 @@ Per-resource opt-outs:
   matches the configured `--dpi`.
 - `--no-cache-text` — re-extract the text layer.
 - `--no-cache-resized` — re-resize the downscaled JPEG.
-- `--no-cache-extract` — re-run the extractor. The cached `extract.txt`
-  is ignored, but the formatter still trusts its own cache (unless that
-  flag is set).
-- `--no-cache-format` — re-run the formatter. When the cached
-  `format.md` is missing the runner falls through to the full pipeline.
+- `--no-cache-format` — re-run extraction. When the cached
+  `format.md` is missing or bypassed, the runner re-runs extraction.
 - `--no-cache-all` — sets every per-resource flag.
 
 Use `--no-intermediates` for ephemeral runs (writes go to a tempdir).
@@ -314,22 +302,17 @@ auto-loads `.env` from the current working directory at import time.
 
 The token-budget planner already downsizes page images to stay under
 `PDF2MD_AGENT_CTX_LIMIT * PDF2MD_AGENT_TOKEN_BUDGET_SAFETY`. The default
-limit is auto-detected at startup (probe `/v1/models` → hardcoded
-fallback per model). If you're still hitting the limit:
+limit is determined at startup from a hardcoded fallback per model. If you're still hitting the limit:
 
 - Lower `--image-long-side` (e.g. 1024) or `--image-quality` (e.g. 70).
-- Check the startup log for the resolved `ctx_limit` value — the probe
-  only reads fields named `context_window` / `max_context_tokens` /
-  `max_input_tokens` / `context_length` / `max_tokens` /
-  `max_sequence_length`; if your provider uses a different field name,
-  set `PDF2MD_AGENT_CTX_LIMIT` explicitly.
+- Check the startup log for the resolved `ctx_limit` value; if your model needs a customized window limit, set `PDF2MD_AGENT_CTX_LIMIT` explicitly.
 
 ### Output has gibberish or hallucinated content
 
 - Try `--dpi 200` (or higher) — small fonts / dense formulas benefit.
 - If a specific page failed, inspect
-  `.pdf2md-agent-cache/<pdf-stem>/pages/page_NNNN_extract.txt` — that's
-  exactly what the extractor returned before the formatter cleaned it up.
+  `.pdf2md-agent-cache/<pdf-stem>/pages/page_NNNN_format.md` — that's
+  exactly what the model returned for that page.
 
 ### Pages keep falling back to the text-layer stub
 
@@ -379,13 +362,13 @@ src/pdf2md_agent/
 ├── post_stream_decision.py # block split + continuation + smart join + CJK detection
 ├── post_stream_table.py    # table-row continuation + header dedup
 └── crew/
-    ├── agents.py           # extractor / formatter personas
+    ├── agents.py           # extractor persona
     ├── tasks.py            # build_extract_description + factory functions
     ├── multimodal_patch.py # AddImageTool monkey-patch
     ├── runner.py           # per-page pipeline orchestrator
-    ├── extraction.py       # extract → format → reflect loop
+    ├── extraction.py       # per-page extraction loop
     ├── page_image.py       # token-budget planning + tiling + downscale
-    ├── fallback.py         # text-layer fallback helpers + sentinel
+    ├── fallback.py         # text-layer fallback helpers
     ├── output.py           # _strip_think + _output (CrewAI task output cleanup)
     └── results.py          # PageResult shared value type
 ```
@@ -407,7 +390,7 @@ pytest -ra tests/
 | `test_llm_retry.py` | `RetryConfig` validation + `is_transient` + backoff + timeout guard |
 | `test_token_budget.py` | `estimate_text_tokens`, `estimate_image_tokens`, `plan_for_image` |
 | `test_vision.py` | `make_vision_llm` endpoint wiring + timeout pass-through |
-| `test_runner.py` | `run_pipeline` happy-path + extract-then-format + timeout guard |
+| `test_runner.py` | `run_pipeline` happy-path + fallback + timeout guard |
 | `test_post_stream.py` | `StreamingStitcher` heuristic (paragraph/list/table), finalize semantics, smart CJK/Latin join |
 | `test_misc_coverage.py` | CLI argument groups, version, numeric validation, atomic write |
 | `test_d8_coverage.py` | D8 batch coverage (CLI seams, runner helpers, multimodal patch) |

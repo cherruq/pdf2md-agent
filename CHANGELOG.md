@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `--no-cache-all` plus the per-resource `--no-cache-{render,text,resized,extract,format,summary}` flag family. Default semantics flipped: cache is trusted unless explicitly opted out. The single `CacheNoCacheFlags` dataclass (`src/pdf2md_agent/cache.py:CacheNoCacheFlags`) is the typed contract between CLI and runner.
+- `--no-cache-all` plus the per-resource `--no-cache-{render,text,resized,format}` flag family. Default semantics flipped: cache is trusted unless explicitly opted out. The single `CacheNoCacheFlags` dataclass (`src/pdf2md_agent/cache.py:CacheNoCacheFlags`) is the typed contract between CLI and runner.
 - `--request-timeout` CLI flag + `REQUEST_TIMEOUT_SECONDS` config (default 60s). Both the OpenAI SDK call and the runner's per-attempt guard share the value; a wall-clock overrun reclassifies the attempt as transient so the retry loop re-issues.
 - `--version` / `-V` flag that prints the package version (`pdf2md_agent.__version__`) and exits 0.
 - Meta fingerprint validation: `meta.json` now records `model` and `persona_version` (16-char SHA-256 of the active persona strings). A drift in any fingerprint field except `pages` refuses the run; a `pages`-only drift is informational (see Fixed).
@@ -21,14 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Numeric CLI validation: `--max-retries`, `--image-quality`, `--image-long-side`, `--max-summary-chars`, `--ctx-limit`, `--request-timeout` now reject out-of-range or non-numeric values at the parser.
 
 ### Changed
-- Pipeline description in `--help`: explicitly lists the five stages (render → extract → format → summarize → stitch) and the cache fingerprint fields.
-- Internal `run_pipeline` signature: `resume: bool` and `reformat: bool = False` removed; the single `no_cache: CacheNoCacheFlags` parameter drives the per-page priority chain (format short-circuit → extract short-circuit → full pipeline).
+- Internal `run_pipeline` signature: `resume: bool` and `reformat: bool = False` removed; the single `no_cache: CacheNoCacheFlags` parameter drives the per-page priority chain (format short-circuit → full pipeline).
 
 ### Breaking
+- Formatter step and `extract.txt` artifact removed: The text-only formatter agent has been removed. The multimodal Extractor agent now directly outputs strict CommonMark to `format.md`. The `--no-cache-extract` flag and intermediate `extract.txt` files have been removed without backward compatibility.
 - `--resume` removed. Use `--no-cache-all` (or selectively `--no-cache-format`) to force a re-run.
-- `--reformat` removed. The layout-aware formatter persona was deleted; the only formatter persona is the strict CommonMark one.
+- `--reformat` removed. The layout-aware formatter persona was deleted; the only persona is the strict CommonMark extractor.
 - Pre-`0.3.0` `meta.json` (4 fields) will fail fingerprint validation under any cache reuse. Wipe `.pdf2md-agent-cache/<stem>/` (or use `--no-cache-all` once) after upgrading.
-- `FORMATTER_PERSONA_REFORMAT` and the `reformat` parameter on `make_formatter` / `make_format_task` are gone. Cache files written under the old `--reformat` mode are no longer trusted by the new extract-short-circuit (the new path re-runs the strict formatter on whatever extract.txt is on disk).
 - Retry policy rewrite: `RetryConfig.backoff` and the `--retry-backoff` CLI flag are removed. Per-retry delays now follow the Fibonacci sequence (1, 1, 2, 3, 5, 8, 13, …) scaled by `--retry-initial-delay` (default 1.0s) and capped at `--retry-max-delay` (default 900s / 15 min). The default `--max-retries` is now `0` (= unlimited transient retries); pass a positive integer or `PDF2MD_AGENT_MAX_RETRIES` to bound the budget. Existing scripts that set `PDF2MD_AGENT_RETRY_BACKOFF` or rely on the previous 30s cap should be reviewed.
 - Token-budget default change: `PDF2MD_AGENT_CTX_LIMIT` no longer hardcodes `2013`. The runner now resolves the context window at startup via `pdf2md_agent.config.resolve_ctx_limit`, which (1) honours an explicit `PDF2MD_AGENT_CTX_LIMIT` env var, (2) probes `{OPENAI_BASE_URL}/models` and reads `context_window` / `max_context_tokens` / `max_input_tokens` / `context_length` / `max_tokens` / `max_sequence_length` (clamped to 1 048 576), then (3) falls back to a hardcoded per-model default (524 288 for MiniMax-M3, 128 000 for `gpt-4o*`, 200 000 for Claude 3.x). Existing scripts that pinned `PDF2MD_AGENT_CTX_LIMIT=2013` will silently keep the old ceiling — remove the env var to let the probe run. The internal `CTX_LIMIT` constant is removed; callers now use `resolve_ctx_limit()` (cached, call `cache_clear()` in tests).
 
