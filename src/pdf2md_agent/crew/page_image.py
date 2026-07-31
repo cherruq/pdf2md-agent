@@ -27,14 +27,21 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from typing import TYPE_CHECKING
 from pdf2md_agent.cache import CacheLayout
-from pdf2md_agent.pdf_renderer import PageImage
+from pdf2md_agent.pdf_renderer import RenderedPage
 from pdf2md_agent.image_budget import plan_for_image
 from pdf2md_agent.token_estimator import (
     estimate_image_tokens,
     estimate_text_tokens,
 )
+from pdf2md_agent.config import resolve_ctx_limit
+from pdf2md_agent.crew.agents import EXTRACTOR_BACKSTORY
 from pdf2md_agent.crew.tasks import build_extract_description
+from pdf2md_agent.tuning import IMAGE_MIN_LONG_SIDE, TOKEN_BUDGET_SAFETY_DEFAULT
+
+if TYPE_CHECKING:
+    from pdf2md_agent.config import ConversionConfig
 
 log = logging.getLogger("pdf2md_agent.runner")
 
@@ -80,7 +87,7 @@ def _resized_cache_path(layout: CacheLayout, page_number: int) -> Path:
 
 
 def _make_tiles(
-    page: PageImage, pages_dir: Path, *, jpeg_quality: int
+    page: RenderedPage, pages_dir: Path, *, jpeg_quality: int
 ) -> tuple[Path, Path]:
     """Split ``page.image_path`` into two vertically-stacked JPEG tiles.
 
@@ -119,19 +126,11 @@ def _make_tiles(
 
 def prepare_page_image(
     *,
-    page: PageImage,
-    layout: CacheLayout,
+    page: RenderedPage,
     text_hint_str: str,
-    ctx_limit: int,
-    image_long_side: int,
-    image_min_long_side: int,
-    image_jpeg_quality: int,
-    token_budget_safety: float,
+    config: ConversionConfig,
     idx: int,
     total: int,
-    extractor_persona_text: str,
-    phases: str,
-    **_kwargs: object,
 ) -> PreparedPage:
     """Plan and produce the image(s) the extractor should attach.
 
@@ -141,7 +140,12 @@ def prepare_page_image(
     downscaled (binary search) until it fits. If it cannot fit even at
     `image_min_long_side`, the layout falls back to tile splitting (!32).
     """
-    persona_tokens = estimate_text_tokens(extractor_persona_text)
+    layout = config.layout
+    image_long_side = config.image_long_side
+    image_jpeg_quality = config.image_jpeg_quality
+    ctx_limit = config.ctx_limit if config.ctx_limit > 0 else resolve_ctx_limit()
+
+    persona_tokens = estimate_text_tokens(EXTRACTOR_BACKSTORY)
     description_for_budget = build_extract_description(
         page.image_path, text_hint_str
     )
@@ -152,9 +156,9 @@ def prepare_page_image(
         fixed_text_tokens=fixed_text_tokens,
         image_path=page.image_path,
         target_long_side=image_long_side,
-        min_long_side=image_min_long_side,
+        min_long_side=IMAGE_MIN_LONG_SIDE,
         jpeg_quality=image_jpeg_quality,
-        safety=token_budget_safety,
+        safety=TOKEN_BUDGET_SAFETY_DEFAULT,
     )
     current_img_tokens = estimate_image_tokens(page.image_path)
     log.info(
@@ -184,8 +188,8 @@ def prepare_page_image(
             page, pages_dir, jpeg_quality=image_jpeg_quality,
         )
         log.info(
-            "  [%d/%d] page %d: %s starting",
-            idx, total, page.page_number, phases,
+            "  [%d/%d] page %d: extract + format starting",
+            idx, total, page.page_number,
         )
         return PreparedPage(
             attach_image_path=page.image_path,
@@ -206,8 +210,8 @@ def prepare_page_image(
                 jpeg_quality=image_jpeg_quality,
             )
         log.info(
-            "  [%d/%d] page %d: %s starting",
-            idx, total, page.page_number, phases,
+            "  [%d/%d] page %d: extract + format starting",
+            idx, total, page.page_number,
         )
         return PreparedPage(
             attach_image_path=resized_path,
@@ -217,8 +221,8 @@ def prepare_page_image(
         )
 
     log.info(
-        "  [%d/%d] page %d: %s starting",
-        idx, total, page.page_number, phases,
+        "  [%d/%d] page %d: extract + format starting",
+        idx, total, page.page_number,
     )
     return PreparedPage(
         attach_image_path=page.image_path,

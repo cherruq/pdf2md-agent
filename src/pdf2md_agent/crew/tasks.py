@@ -45,12 +45,12 @@ def extract_task_intro(
         return (
             f"This page was too large and has been split into tiles. "
             f"Call your add_image tool with image_url on each of these paths: {tile_str}. "
-            f"Then transcribe their combined full content into raw markdown.\n\n"
+            f"Then transcribe their combined full content into strict CommonMark markdown.\n\n"
         )
     return (
         f"Call your add_image tool with image_url=`{page_path}` to attach "
         f"the rendered page image, then transcribe its full content "
-        f"into raw markdown.\n\n"
+        f"into strict CommonMark markdown.\n\n"
     )
 
 
@@ -82,6 +82,8 @@ def build_extract_description(
     return (
         f"{_text_hint_block(text_hint)}"
         f"{extract_task_intro(page_path, is_tiled, tile_paths)}"
+        "Formatting rule: output strict CommonMark markdown. Normalize table "
+        "syntax, fix broken lists, and strip OCR noise.\n\n"
         f"{TASKS_RULES_TEXT}"
     )
 
@@ -103,48 +105,7 @@ def make_extract_task(
     )
     return Task(
         description=description,
-        expected_output="Verbatim markdown transcription of the page",
+        expected_output="Clean CommonMark markdown transcription of the page, verbatim language preserved",
         agent=extractor,
     )
 
-
-def make_format_task(
-    formatter: Agent,
-    extract_task: Task,
-) -> Task:
-    """Create the cleanup task; sees the extractor's output via context."""
-    description = (
-        "Rewrite the extracted markdown as strict CommonMark. Fix "
-        "broken lists, normalize table syntax, strip OCR noise.\n\n"
-        f"{_COMMON_TASK_RULES}"
-    )
-    return Task(
-        description=description,
-        expected_output="Clean CommonMark markdown of the page, language preserved",
-        agent=formatter,
-        context=[extract_task],
-    )
-
-
-def make_format_task_from_extract_file(
-    formatter: Agent,
-    extract_path: Path,
-) -> Task:
-    """Format task fed from a cached ``page_NNNN_extract.txt`` on disk."""
-    text = extract_path.read_text(encoding="utf-8")
-    return Task(
-        description=(
-            "Rewrite the extracted markdown below as strict CommonMark. "
-            "Preserve every word verbatim — do not drop, translate, or "
-            "rewrite content. Only normalize formatting; output language "
-            "must exactly match the input.\n\n"
-            f"{_COMMON_TASK_RULES}\n\n"
-            "Extracted content (read from disk; treat as ground truth):\n"
-            "```\n"
-            f"{text}\n"
-            "```"
-        ),
-        expected_output="Clean CommonMark markdown of the page, language preserved",
-        agent=formatter,
-        context=[],
-    )
