@@ -7,10 +7,10 @@ from unittest.mock import patch
 import pytest
 
 from pdf2md_agent import cli
-from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags, has_cached_extract
+from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import ConversionConfig
 from pdf2md_agent.crew import runner
-from pdf2md_agent.crew.runner import PageImage, run_pipeline
+from pdf2md_agent.crew.runner import RenderedPage, run_pipeline
 from pdf2md_agent.llm_retry import RetryConfig
 
 
@@ -24,8 +24,8 @@ class _FakeTask:
         self.output = _FakeOutput(raw)
 
 
-def _page(page_number: int) -> PageImage:
-    return PageImage(
+def _page(page_number: int) -> RenderedPage:
+    return RenderedPage(
         page_number=page_number,
         width=100,
         height=100,
@@ -76,14 +76,6 @@ def test_no_cache_defaults_all_false() -> None:
     assert args.no_cache_render is False
     assert args.no_cache_text is False
     assert args.no_cache_resized is False
-    assert args.no_cache_extract is False
-    assert args.no_cache_format is False
-
-
-def test_no_cache_extract_individual_flag() -> None:
-    parser = cli.build_parser()
-    args = parser.parse_args(["in.pdf", "-o", "out.md", "--no-cache-extract"])
-    assert args.no_cache_extract is True
     assert args.no_cache_format is False
 
 
@@ -94,7 +86,6 @@ def test_no_cache_all_sets_every_flag() -> None:
     assert args.no_cache_render is True
     assert args.no_cache_text is True
     assert args.no_cache_resized is True
-    assert args.no_cache_extract is True
     assert args.no_cache_format is True
 
 
@@ -120,8 +111,7 @@ def test_resolve_no_cache_flags_mirrors_args() -> None:
     [
         CacheNoCacheFlags(),
         CacheNoCacheFlags(format=True),
-        CacheNoCacheFlags(extract=True, format=True),
-        CacheNoCacheFlags(render=True, text=True, resized=True, extract=True),
+        CacheNoCacheFlags(render=True, text=True, resized=True),
     ],
 )
 def test_cache_no_cache_flags_all_false_for_partial(flags: CacheNoCacheFlags) -> None:
@@ -130,44 +120,14 @@ def test_cache_no_cache_flags_all_false_for_partial(flags: CacheNoCacheFlags) ->
 
 def test_cache_no_cache_flags_all_true_only_when_every_flag_set() -> None:
     assert CacheNoCacheFlags(
-        render=True, text=True, resized=True, extract=True, format=True
+        render=True, text=True, resized=True, format=True
     ).all() is True
-
-
-# --- H1 sentinel: has_cached_extract rejects empty extract.txt -------------
-
-
-def test_has_cached_extract_false_when_extract_empty(tmp_path: Path) -> None:
-    layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "fake.pdf")
-    layout.page_extract_path(1).write_text("", encoding="utf-8")
-    assert has_cached_extract(layout, 1) is False
-
-
-def test_has_cached_extract_true_when_extract_nonempty(tmp_path: Path) -> None:
-    layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "fake.pdf")
-    layout.page_extract_path(1).write_text("body", encoding="utf-8")
-    assert has_cached_extract(layout, 1) is True
-
-
-def test_has_cached_extract_false_when_extract_is_fallback_sentinel(
-    tmp_path: Path,
-) -> None:
-    from pdf2md_agent.crew.runner import _FALLBACK_SENTINEL
-
-    layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "fake.pdf")
-    layout.page_extract_path(1).write_text(
-        _FALLBACK_SENTINEL.format(page=1), encoding="utf-8"
-    )
-    assert has_cached_extract(layout, 1) is False
 
 
 # --- per-page priority matrix ----------------------------------------------
 
 
 def _seed_complete_page(layout: CacheLayout, page_number: int) -> None:
-    layout.page_extract_path(page_number).write_text(
-        "extracted body", encoding="utf-8"
-    )
     layout.page_format_path(page_number).write_text(
         "final md", encoding="utf-8"
     )
@@ -183,8 +143,7 @@ def test_no_cache_format_reruns_full_pipeline(
     layout = _layout(tmp_path, 1)
     _seed_complete_page(layout, 1)
 
-    extract_t = _FakeTask(raw="fresh extract")
-    format_t = _FakeTask(raw="fresh md")
+    extract_t = _FakeTask(raw="fresh md")
 
     calls: list[str] = []
 
@@ -192,9 +151,7 @@ def test_no_cache_format_reruns_full_pipeline(
         calls.append("kickoff")
 
     with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
          patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
          patch.object(runner, "Crew") as crew_cls:
         crew_cls.return_value.kickoff = _track
         results = run_pipeline(
@@ -208,75 +165,6 @@ def test_no_cache_format_reruns_full_pipeline(
     assert layout.page_format_path(1).read_text(encoding="utf-8") == "fresh md"
 
 
-def _seed_extract_only(layout: CacheLayout, page_number: int) -> None:
-    layout.page_extract_path(page_number).write_text(
-        "extracted body", encoding="utf-8"
-    )
-    layout.page_text_path(page_number).write_text(
-        "text hint", encoding="utf-8"
-    )
-
-
-def test_no_cache_extract_runs_formatter_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    page = _page(1)
-    layout = _layout(tmp_path, 1)
-    _seed_extract_only(layout, 1)
-
-    extract_t = _FakeTask(raw="unused")
-    format_t = _FakeTask(raw="re-formatted md")
-
-    extractor_calls: list[object] = []
-
-    def _track_extractor(*_args: object, **_kwargs: object) -> object:
-        extractor_calls.append(object())
-        class _E: ...
-        return _E()
-
-    crew_obj = type("C", (), {})()
-    crew_obj.kickoff = lambda: None
-
-    with patch.object(runner, "make_extractor", side_effect=_track_extractor), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_format_task_from_extract_file", return_value=format_t), \
-         patch.object(runner, "_output", side_effect=lambda t: getattr(t.output, "raw", "")), \
-         patch.object(runner, "Crew", return_value=crew_obj):
-        results = run_pipeline(
-            pages=[page],
-            config=_make_config(layout=layout, no_cache=CacheNoCacheFlags(extract=True)),
-            llm=object(),  # type: ignore[arg-type]
-        )
-
-    assert extractor_calls == [], "make_extractor must NOT run with --no-cache-extract"
-    assert results[0].markdown == "re-formatted md"
-    assert layout.page_format_path(1).read_text(encoding="utf-8") == "re-formatted md"
-
-
-def test_no_cache_extract_falls_through_when_extract_missing(
-    tmp_path: Path,
-) -> None:
-    page = _page(1)
-    layout = _layout(tmp_path, 1)
-
-    extract_t = _FakeTask(raw="fresh extract")
-    format_t = _FakeTask(raw="fresh md")
-
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "make_format_task", return_value=format_t), \
-         patch.object(runner, "Crew") as crew_cls:
-        crew_cls.return_value.kickoff = lambda: None
-        results = run_pipeline(
-            pages=[page],
-            config=_make_config(layout=layout, no_cache=CacheNoCacheFlags(extract=True)),
-            llm=object(),  # type: ignore[arg-type]
-        )
-
-    assert results[0].markdown == "fresh md"
-
-
 def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
     page = _page(1)
     layout = _layout(tmp_path, 1)
@@ -288,9 +176,7 @@ def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
         kickoff_calls.append(None)
 
     with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_formatter"), \
          patch.object(runner, "make_extract_task"), \
-         patch.object(runner, "make_format_task"), \
          patch.object(runner, "Crew") as crew_cls:
         crew_cls.return_value.kickoff = _track
         results = run_pipeline(

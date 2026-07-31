@@ -5,7 +5,7 @@ Targets (per findings.md):
 - D8-005  ``cli.cmd_convert`` (integration with mocked LLM + IO)
 - D8-006  ``cli._run_pipeline`` (mocked render/run_pipeline/stitch + atomic write)
 - D8-007  ``runner._resize_page_png`` (Pillow resize, long-side applied)
-- D8-009  ``runner._record_text_layer_fallback`` (extract.txt + format.md writes)
+- D8-009  ``runner._record_text_layer_fallback`` (format.md writes)
 - D8-010  ``runner._text_layer_fallback`` (markdown stub shape)
 - D8-011  ``runner._output`` (attribute extraction)
 - D8-014  ``multimodal_patch._encode_local_image`` (JPEG bytes shape)
@@ -47,7 +47,7 @@ from pdf2md_agent.crew.runner import (
     _resize_page_png,
     _text_layer_fallback,
 )
-from pdf2md_agent.pdf_renderer import PageImage
+from pdf2md_agent.pdf_renderer import RenderedPage
 
 
 # --- helpers ---------------------------------------------------------------
@@ -132,7 +132,6 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         no_cache_render=False,
         no_cache_text=False,
         no_cache_resized=False,
-        no_cache_extract=False,
         no_cache_format=False,
         no_cache_all=False,
         max_retries=None,
@@ -161,7 +160,7 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     pages_dir.mkdir(parents=True, exist_ok=True)
     png_path = pages_dir / "page_0001.png"
     Image.new("RGB", (72, 72), "white").save(png_path, "PNG")
-    page = PageImage(
+    page = RenderedPage(
         page_number=1, width=72, height=72, image_path=png_path,
     )
 
@@ -218,7 +217,7 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
     args = _build_minimal_args(tmp_path, pdf)
     args.output = out_path
 
-    page = PageImage(
+    page = RenderedPage(
         page_number=1, width=72, height=72, image_path=tmp_path / "page_0001.png",
     )
     layout = CacheLayout.for_pdf(tmp_path / ".pdf2md-agent-cache" / "in", pdf)
@@ -307,7 +306,7 @@ def test_resize_page_png_no_op_when_target_exceeds_source(tmp_path: Path) -> Non
 def _make_page_artifacts(tmp_path: Path, page_number: int, text: str):
     """Build a ``PageArtifacts`` with a populated ``page_text.txt`` for fallback testing."""
     layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "x.pdf")
-    page = PageImage(
+    page = RenderedPage(
         page_number=page_number, width=100, height=100,
         image_path=tmp_path / "page.png",
     )
@@ -316,8 +315,8 @@ def _make_page_artifacts(tmp_path: Path, page_number: int, text: str):
     return artifacts
 
 
-def test_record_text_layer_fallback_writes_extract_and_format(tmp_path: Path) -> None:
-    """Both cache files written; extract.txt is empty; format.md has the stub marker."""
+def test_record_text_layer_fallback_writes_format(tmp_path: Path) -> None:
+    """Format cache file written; format.md has the stub marker."""
     artifacts = _make_page_artifacts(tmp_path, 1, "raw pdf text\n")
 
     result = _record_text_layer_fallback(
@@ -329,9 +328,6 @@ def test_record_text_layer_fallback_writes_extract_and_format(tmp_path: Path) ->
     assert isinstance(result, PageResult)
     assert result.page_number == 1
     assert "vision model unavailable" in result.markdown
-    extract_text = artifacts.extract_text.read_text(encoding="utf-8")
-    assert "vision model unavailable" in extract_text
-    assert "page 1" in extract_text
     assert "raw pdf text" in artifacts.format_markdown.read_text(encoding="utf-8")
 
 

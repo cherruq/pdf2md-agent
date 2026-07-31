@@ -19,7 +19,7 @@ from pdf2md_agent.filesystem_safety import safe_cache_stem as _safe_cache_stem
 from pdf2md_agent.cache import atomic_write_text as _atomic_write_text
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
-from pdf2md_agent.pdf_renderer import PageImage, read_page_text, render_pdf
+from pdf2md_agent.pdf_renderer import RenderedPage, read_page_text, render_pdf
 
 
 # --- CacheLayout ----------------------------------------------------------
@@ -36,28 +36,23 @@ def test_cache_layout_for_pdf_creates_subdirs(tmp_path: Path) -> None:
 
 def test_cache_layout_artifacts_for_round_trip(tmp_path: Path) -> None:
     layout = CacheLayout.for_pdf(tmp_path / "out", tmp_path / "x.pdf")
-    page = PageImage(page_number=3, width=100, height=100, image_path=tmp_path / "p3.png")
+    page = RenderedPage(page_number=3, width=100, height=100, image_path=tmp_path / "p3.png")
     a = layout.artifacts_for(page)
     assert a.page_number == 3
     assert a.page_png == layout.page_png_path(3)
     assert a.page_text == layout.page_text_path(3)
-    assert a.extract_text == layout.page_extract_path(3)
     assert a.format_markdown == layout.page_format_path(3)
 
 
-def test_is_page_complete_true_when_both_outputs_exist(tmp_path: Path) -> None:
+def test_is_page_complete_true_when_format_exists(tmp_path: Path) -> None:
     layout = CacheLayout.for_pdf(tmp_path / "out", tmp_path / "x.pdf")
-    layout.page_extract_path(1).write_text("extract", encoding="utf-8")
     layout.page_format_path(1).write_text("md", encoding="utf-8")
     assert is_page_complete(layout, 1) is True
 
 
-def test_is_page_complete_false_when_one_output_missing(tmp_path: Path) -> None:
+def test_is_page_complete_false_when_format_missing(tmp_path: Path) -> None:
     layout = CacheLayout.for_pdf(tmp_path / "out", tmp_path / "x.pdf")
-    layout.page_extract_path(2).write_text("extract", encoding="utf-8")
     assert is_page_complete(layout, 2) is False
-    layout.page_format_path(3).write_text("md", encoding="utf-8")
-    assert is_page_complete(layout, 3) is False
 
 
 # --- pdf_renderer.read_page_text ------------------------------------------
