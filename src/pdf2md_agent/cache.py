@@ -10,16 +10,11 @@ from pathlib import Path
 from typing import Any, Final, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pdf2md_agent.pdf_renderer import PageImage
+    from pdf2md_agent.pdf_renderer import RenderedPage
 
 log = logging.getLogger("pdf2md_agent.cache")
 
 _ATOMIC_TMP_MODE: Final[int] = 0o600
-
-FALLBACK_SENTINEL: Final[str] = (
-    "(vision model unavailable for page {page}; text-layer fallback emitted; "
-    "treat as sentinel — no extractor payload available)\n"
-)
 
 
 # --- Filesystem primitives ---------------------------------------------------
@@ -62,12 +57,11 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class PageArtifacts:
-    """Files written for one page: source PNG, native text, agent outputs."""
+    """Files written for one page: source PNG, native text, and format markdown."""
 
     page_number: int
     page_png: Path
     page_text: Path
-    extract_text: Path
     format_markdown: Path
 
 
@@ -96,18 +90,14 @@ class CacheLayout:
     def page_text_path(self, page_number: int) -> Path:
         return self.pages_dir / f"page_{page_number:04d}_text.txt"
 
-    def page_extract_path(self, page_number: int) -> Path:
-        return self.pages_dir / f"page_{page_number:04d}_extract.txt"
-
     def page_format_path(self, page_number: int) -> Path:
         return self.pages_dir / f"page_{page_number:04d}_format.md"
 
-    def artifacts_for(self, page: PageImage) -> PageArtifacts:
+    def artifacts_for(self, page: RenderedPage) -> PageArtifacts:
         return PageArtifacts(
             page_number=page.page_number,
             page_png=self.page_png_path(page.page_number),
             page_text=self.page_text_path(page.page_number),
-            extract_text=self.page_extract_path(page.page_number),
             format_markdown=self.page_format_path(page.page_number),
         )
 
@@ -179,11 +169,8 @@ def check_meta_matches(
 
 
 def is_page_complete(layout: CacheLayout, page_number: int) -> bool:
-    """True if cached extract and format outputs already exist for this page."""
-    return (
-        layout.page_extract_path(page_number).exists()
-        and layout.page_format_path(page_number).exists()
-    )
+    """True if cached format output already exists for this page."""
+    return layout.page_format_path(page_number).exists()
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,7 +180,6 @@ class CacheNoCacheFlags:
     render: bool = False
     text: bool = False
     resized: bool = False
-    extract: bool = False
     format: bool = False
 
     def as_dict(self) -> dict[str, bool]:
@@ -201,7 +187,6 @@ class CacheNoCacheFlags:
             "render": self.render,
             "text": self.text,
             "resized": self.resized,
-            "extract": self.extract,
             "format": self.format,
         }
 
@@ -210,29 +195,13 @@ class CacheNoCacheFlags:
         return all(self.as_dict().values())
 
 
-_FALLBACK_SENTINEL_PREFIX: Final[str] = "(vision model unavailable for page"
-
-
-def has_cached_extract(layout: CacheLayout, page_number: int) -> bool:
-    """True if a valid cached extract exists and is not a fallback sentinel."""
-    path = layout.page_extract_path(page_number)
-    if not (path.is_file() and path.stat().st_size > 0):
-        return False
-    head = path.read_text(encoding="utf-8", errors="replace")[:128]
-    if head.lstrip().startswith(_FALLBACK_SENTINEL_PREFIX):
-        return False
-    return True
-
-
 __all__ = [
     "CacheLayout",
     "CacheNoCacheFlags",
-    "FALLBACK_SENTINEL",
     "MetaInfo",
     "PageArtifacts",
     "atomic_write_text",
     "check_meta_matches",
-    "has_cached_extract",
     "is_page_complete",
     "read_meta",
     "write_meta",

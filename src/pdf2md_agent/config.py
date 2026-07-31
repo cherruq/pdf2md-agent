@@ -11,7 +11,14 @@ from typing import TYPE_CHECKING, Final
 
 from dotenv import load_dotenv
 
-from pdf2md_agent.ctx_probe import probe_ctx_limit
+from pdf2md_agent.tuning import (  # noqa: F401 — re-exported in __all__ for backward compatibility
+    DEFAULT_IMAGE_JPEG_QUALITY,
+    DEFAULT_IMAGE_LONG_SIDE,
+    DEFAULT_STITCH_MODE,
+    FALLBACK_TO_TEXT,
+    IMAGE_MIN_LONG_SIDE,
+    TOKEN_BUDGET_SAFETY_DEFAULT,
+)
 
 if TYPE_CHECKING:
     from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
@@ -79,7 +86,6 @@ def require_api_key() -> str:
 # --- Token budget + image downscale -----------------------------------------
 
 
-_MAX_CTX_LIMIT: Final[int] = 1_048_576
 _DEFAULT_CTX_LIMIT: Final[int] = 128_000
 
 _HARD_CODED_CTX_LIMITS: Final[dict[str, int]] = {
@@ -109,17 +115,6 @@ def resolve_ctx_limit() -> int:
         except ValueError:
             pass
 
-    api_key = _env("OPENAI_API_KEY")
-    if api_key:
-        probed = probe_ctx_limit(OPENAI_BASE_URL, api_key, MODEL_NAME)
-        if probed is not None and probed > 0:
-            clamped = min(probed, _MAX_CTX_LIMIT)
-            log.info(
-                "ctx_limit: %d (probed from %s/models for %s)",
-                clamped, OPENAI_BASE_URL, MODEL_NAME,
-            )
-            return clamped
-
     hardcoded = _HARD_CODED_CTX_LIMITS.get(MODEL_NAME)
     if hardcoded is not None:
         log.info("ctx_limit: %d (hardcoded for %s)", hardcoded, MODEL_NAME)
@@ -133,10 +128,9 @@ def resolve_ctx_limit() -> int:
     return _DEFAULT_CTX_LIMIT
 
 
-TOKEN_BUDGET_SAFETY: Final[float] = 0.85
-IMAGE_LONG_SIDE: Final[int] = 1536
-IMAGE_JPEG_QUALITY: Final[int] = 85
-IMAGE_MIN_LONG_SIDE: Final[int] = 768
+TOKEN_BUDGET_SAFETY: Final[float] = TOKEN_BUDGET_SAFETY_DEFAULT
+IMAGE_LONG_SIDE: Final[int] = DEFAULT_IMAGE_LONG_SIDE
+IMAGE_JPEG_QUALITY: Final[int] = DEFAULT_IMAGE_JPEG_QUALITY
 
 REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
     "PDF2MD_AGENT_REQUEST_TIMEOUT", 60.0
@@ -152,7 +146,6 @@ RETRY_MAX_ATTEMPTS: Final[int | None] = _env_int_or_unlimited(
 RETRY_INITIAL_DELAY: Final[float] = 1.0
 RETRY_MAX_DELAY: Final[float] = 900.0
 RETRY_JITTER: Final[float] = 0.25
-FALLBACK_TO_TEXT: Final[bool] = True
 
 
 # --- Job Configuration Struct -----------------------------------------------
@@ -175,7 +168,8 @@ class ConversionConfig:
     image_jpeg_quality: int
     ctx_limit: int
     request_timeout_seconds: float | None
-    stitch_mode: str = "heuristic"
+    stitch_mode: str = DEFAULT_STITCH_MODE
+    fallback_to_text: bool = FALLBACK_TO_TEXT
     started: float = field(default_factory=time.monotonic)
 
 
@@ -193,7 +187,6 @@ __all__ = [
     "RETRY_MAX_ATTEMPTS",
     "RETRY_MAX_DELAY",
     "TOKEN_BUDGET_SAFETY",
-    "probe_ctx_limit",
     "require_api_key",
     "resolve_ctx_limit",
 ]
