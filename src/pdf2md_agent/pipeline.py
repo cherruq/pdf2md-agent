@@ -17,7 +17,7 @@ from pdf2md_agent.config import (
 )
 from pdf2md_agent.crew.runner import run_pipeline
 from pdf2md_agent.pdf_renderer import (
-    PageImage,
+    RenderedPage,
     render_pages as _render_pages,
     render_pdf as render_pdf,  # noqa: F401
 )
@@ -60,17 +60,10 @@ def run_unified_conversion(config: ConversionConfig) -> int:
 
     # --- Step 1: Static Render & Real-time Text Cache Synchronization ---
     log.info("Step 1: rendering PDF to PNGs at %d dpi%s...", config.dpi, " (subset)" if config.resolved_pages else "")
-    pages: list[PageImage] = _render_pages(
-        pdf=config.pdf,
-        render_target=config.render_target,
-        dpi=config.dpi,
-        resolved_pages=config.resolved_pages,
-        no_cache_render=config.no_cache.render,
-        no_cache_text=config.no_cache.text,
-    )
+    pages: list[RenderedPage] = _render_pages(config)
     log.info("Step 1 done: rendered %d page(s) to %s", len(pages), config.render_target)
 
-    # --- Step 2: Parallel Per-Page AI Extraction & Formatter Loop ---
+    # --- Step 2: Parallel Per-Page AI Extraction Loop ---
     log.info("Step 2: running per-page extraction and formatting pipeline")
     llm = make_vision_llm()
     log.info(
@@ -96,12 +89,8 @@ def run_unified_conversion(config: ConversionConfig) -> int:
 
     # --- Step 3: Global Post-processing, Cleanup & Cross-Page Stitching ---
     stitch_mode = StitchMode(config.stitch_mode)
-    if stitch_mode is StitchMode.HEURISTIC:
-        markdown = stitch_pages(results)
-        log.info("Step 3: stitch heuristic (cross-page merged & cleaned)")
-    else:
-        markdown = stitch_pages(results, mode=stitch_mode)
-        log.info("Step 3: stitch off (legacy '---' separator preserved)")
+    markdown = stitch_pages(results, mode=stitch_mode)
+    log.info("Step 3: stitch (%s) done", stitch_mode.value)
     atomic_write_text(config.output, markdown)
     elapsed = time.monotonic() - config.started
     log.info(

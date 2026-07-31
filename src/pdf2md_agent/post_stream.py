@@ -1,6 +1,6 @@
 """Cross-page stitching post-processor.
 
-The per-page formatter sees only one page at a time, so a sentence,
+The per-page extractor sees only one page at a time, so a sentence,
 list item, or table row that gets split across a page boundary is
 emitted as two fragments separated by an explicit ``\\n\\n---\\n\\n``
 delimiter. That hard delimiter makes the split visible in the output

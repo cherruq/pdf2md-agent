@@ -1,6 +1,6 @@
 """Table-row continuation helpers for the cross-page stitcher.
 
-When a page boundary cuts a markdown table mid-row, the formatter for
+When a page boundary cuts a markdown table mid-row, the extractor for
 the next page usually re-emits the table header + separator before the
 continuing rows. Stitching those two fragments naively duplicates the
 header. This module:

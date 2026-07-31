@@ -1,7 +1,7 @@
 """Tests for StreamingStitcher — cross-page paragraph/list/table stitching.
 
 The stitcher is a pure-function post-processor that runs *after* the
-per-page Formatter. It produces a continuous Markdown document by
+per-page Extractor. It produces a continuous Markdown document by
 buffering the last paragraph of each page until it can decide whether
 the next page continues it (like a streaming parser holding back the
 last token until it sees the next one).
