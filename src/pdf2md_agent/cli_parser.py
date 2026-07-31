@@ -16,7 +16,6 @@ _NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
     "render",
     "text",
     "resized",
-    "extract",
     "format",
 )
 
@@ -100,7 +99,6 @@ def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
         render=bool(args.no_cache_render),
         text=bool(args.no_cache_text),
         resized=bool(args.no_cache_resized),
-        extract=bool(args.no_cache_extract),
         format=bool(args.no_cache_format),
     )
 
@@ -224,9 +222,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         dest="no_cache_all",
         help=(
-            "Disable every cache reuse (render/text/resized/extract/"
-            "format). Equivalent to passing all five --no-cache-* "
-            "flags."
+            "Disable every cache reuse (render/text/resized/format). "
+            "Equivalent to passing all four --no-cache-* flags."
         ),
     )
 
