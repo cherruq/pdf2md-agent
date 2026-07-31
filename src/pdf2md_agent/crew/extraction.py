@@ -21,7 +21,12 @@ from pdf2md_agent.llm_retry import (
     call_with_retry,
     is_transient,
 )
-from pdf2md_agent.pdf_renderer import PageImage
+from pdf2md_agent.pdf_renderer import RenderedPage
+from pdf2md_agent.tuning import (
+    PENALTY_PROMPT as _PENALTY_PROMPT,
+    REFLECTION_COVERAGE_THRESHOLD as _REFLECTION_COVERAGE_THRESHOLD,
+    REFLECTION_MAX_ATTEMPTS as _REFLECTION_MAX_ATTEMPTS,
+)
 
 log = logging.getLogger("pdf2md_agent.runner")
 
@@ -33,7 +38,6 @@ class ExtractionOutcome:
     succeeded: bool
     fell_back: bool
     page_result: PageResult | None
-    extract_text: str
     format_md: str
 
 
@@ -42,25 +46,17 @@ def _clean_for_coverage(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-_REFLECTION_COVERAGE_THRESHOLD = 0.90
-_REFLECTION_MAX_ATTEMPTS = 2
-_PENALTY_PROMPT = (
-    "\n\nCRITICAL WARNING: Your previous output missed significant portions "
-    "of the native text. You MUST preserve ALL text. Please re-read the "
-    "page carefully and transcribe completely."
-)
 
 
 def _build_crew(
     *,
     extractor: Any,
-    formatter: Any,
     prepared: PreparedPage,
     text_hint_str: str,
     penalty_prompt: str,
     **_kwargs: object,
-) -> tuple[Any, Any, Any]:
-    """Construct the (extract → format) crew for one attempt."""
+) -> tuple[Any, Any]:
+    """Construct the extraction crew for one attempt."""
     extract_t = _runner.make_extract_task(
         extractor,
         prepared.attach_image_path,
@@ -68,9 +64,8 @@ def _build_crew(
         is_tiled=prepared.is_tiled,
         tile_paths=prepared.tile_paths,
     )
-    format_t = _runner.make_format_task(formatter, extract_t)
-    tasks = [extract_t, format_t]
-    agents_list = [extractor, formatter]
+    tasks = [extract_t]
+    agents_list = [extractor]
 
     crew = _runner.Crew(
         agents=agents_list,
@@ -78,12 +73,12 @@ def _build_crew(
         process=Process.sequential,
         verbose=False,
     )
-    return crew, extract_t, format_t
+    return crew, extract_t
 
 
 def _maybe_reflect(
     *,
-    page: PageImage,
+    page: RenderedPage,
     idx: int,
     total: int,
     format_md: str,
@@ -117,31 +112,26 @@ def _maybe_reflect(
 
 def run_extraction_loop(
     *,
+    page: RenderedPage,
+    prepared: PreparedPage,
     config: ConversionConfig,
-    page: PageImage,
+    llm: LLM,
+    text_hint_str: str,
     idx: int,
     total: int,
-    prepared: PreparedPage,
-    text_hint_str: str,
-    llm: LLM,
-    fallback_to_text: bool = True,
-    **_kwargs: object,
 ) -> ExtractionOutcome:
-    """Run extract → format → (reflect) for one page."""
+    """Run extraction → (reflect) for one page."""
     artifacts = config.layout.artifacts_for(page)
     extractor = _runner.make_extractor(llm)
-    formatter = _runner.make_formatter(llm)
 
     coverage_text_hint = text_hint_str
-    extract_text = ""
     format_md = ""
     reflection_attempts = 0
     penalty_prompt = ""
 
     while True:
-        crew, extract_t, format_t = _build_crew(
+        crew, extract_t = _build_crew(
             extractor=extractor,
-            formatter=formatter,
             prepared=prepared,
             text_hint_str=text_hint_str,
             penalty_prompt=penalty_prompt,
@@ -162,7 +152,7 @@ def run_extraction_loop(
                 timeout_seconds=config.request_timeout_seconds,
             )
         except ValidationError as exc:
-            if not fallback_to_text:
+            if not config.fallback_to_text:
                 raise
             log.warning(
                 "  [%d/%d] page %d: model returned malformed response "
@@ -180,10 +170,10 @@ def run_extraction_loop(
             return ExtractionOutcome(
                 succeeded=False, fell_back=True,
                 page_result=result,
-                extract_text="", format_md="",
+                format_md="",
             )
         except BaseException as exc:  # noqa: BLE001 — see runner/AGENTS.md
-            if not fallback_to_text or not is_transient(exc):
+            if not config.fallback_to_text or not is_transient(exc):
                 raise
             log.warning(
                 "  [%d/%d] page %d: vision pipeline failed after retries (%s); "
@@ -200,11 +190,10 @@ def run_extraction_loop(
             return ExtractionOutcome(
                 succeeded=False, fell_back=True,
                 page_result=result,
-                extract_text="", format_md="",
+                format_md="",
             )
 
-        extract_text = _output(extract_t)
-        format_md = _output(format_t)
+        format_md = _output(extract_t)
 
         should_continue, penalty_prompt = _maybe_reflect(
             page=page, idx=idx, total=total,
@@ -219,9 +208,9 @@ def run_extraction_loop(
     return ExtractionOutcome(
         succeeded=True, fell_back=False,
         page_result=None,
-        extract_text=extract_text, format_md=format_md,
+        format_md=format_md,
     )
-    
+
 
 __all__ = [
     "ExtractionOutcome",
