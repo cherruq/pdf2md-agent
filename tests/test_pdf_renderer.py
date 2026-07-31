@@ -6,7 +6,10 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from pdf2md_agent.pdf_renderer import render_pages, render_pdf
+from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
+from pdf2md_agent.config import ConversionConfig
+from pdf2md_agent.llm_retry import RetryConfig
+from pdf2md_agent.pdf_renderer import RenderedPage, render_pages, render_pdf
 
 
 def _make_pdf(path: Path, pages: int = 2) -> Path:
@@ -100,37 +103,129 @@ def test_render_pages_invalidates_step2_cache_on_text_drift(tmp_path: Path) -> N
     out = tmp_path / "cache" / "pages"
     out.mkdir(parents=True, exist_ok=True)
 
-    # First run: renders page 1 and saves text cache
-    render_pages(
+    layout = CacheLayout(root=out.parent, pages_dir=out, meta_path=out.parent / "meta.json")
+    config = ConversionConfig(
         pdf=pdf,
-        render_target=out,
+        output=tmp_path / "out.md",
         dpi=72,
+        layout=layout,
+        render_target=out,
         resolved_pages=None,
-        no_cache_render=False,
-        no_cache_text=False,
+        no_cache=CacheNoCacheFlags(),
+        retry_config=RetryConfig(),
+        text_hint=True,
+        image_long_side=1536,
+        image_jpeg_quality=85,
+        ctx_limit=256,
+        request_timeout_seconds=60.0,
     )
+
+    # First run: renders page 1 and saves text cache
+    render_pages(config)
     assert (out / "page_0001.png").exists()
     assert (out / "page_0001_text.txt").exists()
 
     # Simulate Step 2 producing cache files
     format_path = out / "page_0001_format.md"
-    extract_path = out / "page_0001_extract.txt"
     format_path.write_text("# Old Content", encoding="utf-8")
-    extract_path.write_text("Old extract", encoding="utf-8")
 
     # Tamper with the saved text file on disk to simulate drift from the real PDF text
     (out / "page_0001_text.txt").write_text("Drifted old text on disk", encoding="utf-8")
 
     # Second run: Step 1 detects drift between real PyMuPDF text and disk text, invalidating Step 2 cache
-    render_pages(
-        pdf=pdf,
-        render_target=out,
-        dpi=72,
-        resolved_pages=None,
-        no_cache_render=False,
-        no_cache_text=False,
-    )
+    render_pages(config)
 
     assert not format_path.exists(), "Step 1 must delete format.md on text drift"
-    assert not extract_path.exists(), "Step 1 must delete extract.txt on text drift"
     assert "page 1" in (out / "page_0001_text.txt").read_text(encoding="utf-8")
+
+
+def test_render_pages_returns_rendered_page_with_text(tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path / "doc.pdf", pages=1)
+    out = tmp_path / "cache" / "pages"
+    out.mkdir(parents=True, exist_ok=True)
+    layout = CacheLayout(root=out.parent, pages_dir=out, meta_path=out.parent / "meta.json")
+    config = ConversionConfig(
+        pdf=pdf,
+        output=tmp_path / "out.md",
+        dpi=72,
+        layout=layout,
+        render_target=out,
+        resolved_pages=None,
+        no_cache=CacheNoCacheFlags(),
+        retry_config=RetryConfig(),
+        text_hint=True,
+        image_long_side=1536,
+        image_jpeg_quality=85,
+        ctx_limit=256,
+        request_timeout_seconds=60.0,
+    )
+    pages = render_pages(config)
+    assert len(pages) == 1
+    assert isinstance(pages[0], RenderedPage)
+    assert pages[0].text_path == out / "page_0001_text.txt"
+    assert "page 1" in pages[0].text
+
+
+def test_render_pages_regenerates_zero_byte_png(tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path / "doc.pdf", pages=1)
+    out = tmp_path / "cache" / "pages"
+    out.mkdir(parents=True, exist_ok=True)
+    layout = CacheLayout(root=out.parent, pages_dir=out, meta_path=out.parent / "meta.json")
+    config = ConversionConfig(
+        pdf=pdf,
+        output=tmp_path / "out.md",
+        dpi=72,
+        layout=layout,
+        render_target=out,
+        resolved_pages=None,
+        no_cache=CacheNoCacheFlags(),
+        retry_config=RetryConfig(),
+        text_hint=True,
+        image_long_side=1536,
+        image_jpeg_quality=85,
+        ctx_limit=256,
+        request_timeout_seconds=60.0,
+    )
+    render_pages(config)
+    png_path = out / "page_0001.png"
+    assert png_path.stat().st_size > 0
+
+    # Simulate a corrupted / zero-byte PNG file from an aborted process
+    png_path.write_bytes(b"")
+    assert png_path.stat().st_size == 0
+
+    # Running render_pages must detect the 0-byte file and regenerate it
+    render_pages(config)
+    assert png_path.stat().st_size > 0
+
+
+def test_render_pages_handles_corrupt_text_cache_without_crashing(tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path / "doc.pdf", pages=1)
+    out = tmp_path / "cache" / "pages"
+    out.mkdir(parents=True, exist_ok=True)
+    layout = CacheLayout(root=out.parent, pages_dir=out, meta_path=out.parent / "meta.json")
+    config = ConversionConfig(
+        pdf=pdf,
+        output=tmp_path / "out.md",
+        dpi=72,
+        layout=layout,
+        render_target=out,
+        resolved_pages=None,
+        no_cache=CacheNoCacheFlags(),
+        retry_config=RetryConfig(),
+        text_hint=True,
+        image_long_side=1536,
+        image_jpeg_quality=85,
+        ctx_limit=256,
+        request_timeout_seconds=60.0,
+    )
+    render_pages(config)
+    txt_path = out / "page_0001_text.txt"
+
+    # Write invalid UTF-8 bytes to simulate a corrupt cache file
+    txt_path.write_bytes(b"\xff\xfe\x00\x80\x81")
+
+    # render_pages must safely handle the decoding error, treat the cache as invalid, and rewrite the valid text
+    pages = render_pages(config)
+    assert "page 1" in txt_path.read_text(encoding="utf-8")
+    assert "page 1" in pages[0].text
