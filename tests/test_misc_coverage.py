@@ -1,7 +1,7 @@
 """Misc coverage: cache, pdf_renderer.read_page_text, runner._strip_think, CLI smoke."""
+
 from __future__ import annotations
 
-import logging
 import pymupdf
 import sys
 from pathlib import Path
@@ -76,9 +76,7 @@ def test_read_page_text_round_trip(tmp_path: Path) -> None:
     pdf = _make_onepage_pdf(tmp_path / "x.pdf")
     pages = render_pdf(pdf, tmp_path, dpi=72)
     assert len(pages) == 1
-    txt = read_page_text(pages[0].image_path.with_name(
-        f"page_{pages[0].page_number:04d}_text.txt"
-    ))
+    txt = read_page_text(pages[0].image_path.with_name(f"page_{pages[0].page_number:04d}_text.txt"))
     assert "page 1" in txt
 
 
@@ -148,6 +146,7 @@ def test_cli_version_prints_and_exits(capsys) -> None:
     out = capsys.readouterr().out
     assert "pdf2md-agent" in out
     from pdf2md_agent import __version__
+
     assert __version__ in out
 
 
@@ -199,6 +198,7 @@ def test_atomic_write_creates_parent(tmp_path: Path) -> None:
 
 def test_atomic_write_mode_is_0o600_on_posix(tmp_path: Path) -> None:
     import os
+
     p = tmp_path / "out.md"
     _atomic_write_text(p, "new")
     mode = os.stat(p).st_mode & 0o777
@@ -215,6 +215,7 @@ def test_safe_intermediates_dir_accepts_normal_path() -> None:
 
 def test_safe_intermediates_dir_rejects_dotdot() -> None:
     import argparse
+
     with pytest.raises(argparse.ArgumentTypeError, match=r"\.\."):
         _safe_intermediates_dir("foo/../etc")
 
@@ -222,10 +223,15 @@ def test_safe_intermediates_dir_rejects_dotdot() -> None:
 def test_cli_parse_rejects_traversal_intermediates_dir() -> None:
     parser = cli.build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args([
-            "in.pdf", "-o", "x.md",
-            "--intermediates-dir", "../escape",
-        ])
+        parser.parse_args(
+            [
+                "in.pdf",
+                "-o",
+                "x.md",
+                "--intermediates-dir",
+                "../escape",
+            ]
+        )
 
 
 # --- _safe_cache_stem (D16-001 / D16-002 / D16-003) -----------------------
@@ -287,16 +293,22 @@ def test_meta_fingerprint_drift_refuses_run(tmp_path: Path) -> None:
         else:
             captured["stderr"] += msg + "\n"
 
-    with patch.object(pipeline, "_render_pages", return_value=[]), \
-         patch.object(pipeline, "make_vision_llm", return_value=object()), \
-         patch.object(pipeline, "run_pipeline", return_value=[]), \
-         patch.object(pipeline, "stitch_pages", return_value=""), \
-         patch("builtins.print", side_effect=_capture_print):
-        rc = cli.main([
-            str(pdf_path),
-            "-o", str(tmp_path / "out.md"),
-            "--intermediates-dir", str(cache_root),
-        ])
+    with (
+        patch.object(pipeline, "_render_pages", return_value=[]),
+        patch.object(pipeline, "make_vision_llm", return_value=object()),
+        patch.object(pipeline, "run_pipeline", return_value=[]),
+        patch.object(pipeline, "stitch_pages", return_value=""),
+        patch("builtins.print", side_effect=_capture_print),
+    ):
+        rc = cli.main(
+            [
+                str(pdf_path),
+                "-o",
+                str(tmp_path / "out.md"),
+                "--intermediates-dir",
+                str(cache_root),
+            ]
+        )
     assert rc == 1, "drift must refuse the run with exit code 1"
     assert "pdf changed" in captured["stderr"]
     assert "--no-cache-all" in captured["stderr"]
@@ -317,16 +329,22 @@ def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
     pdf_path = tmp_path / "input.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
-    with patch.object(pipeline, "_render_pages", return_value=[]), \
-         patch.object(pipeline, "make_vision_llm", return_value=object()), \
-         patch.object(pipeline, "run_pipeline", return_value=[]), \
-         patch.object(pipeline, "stitch_pages", return_value=""):
-        rc = cli.main([
-            str(pdf_path),
-            "-o", str(tmp_path / "out.md"),
-            "--intermediates-dir", str(cache_root),
-            "--no-cache-all",
-        ])
+    with (
+        patch.object(pipeline, "_render_pages", return_value=[]),
+        patch.object(pipeline, "make_vision_llm", return_value=object()),
+        patch.object(pipeline, "run_pipeline", return_value=[]),
+        patch.object(pipeline, "stitch_pages", return_value=""),
+    ):
+        rc = cli.main(
+            [
+                str(pdf_path),
+                "-o",
+                str(tmp_path / "out.md"),
+                "--intermediates-dir",
+                str(cache_root),
+                "--no-cache-all",
+            ]
+        )
 
     assert rc == 0, "drift must NOT refuse the run when --no-cache-all is set"
     post = read_meta(layout.meta_path)

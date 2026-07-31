@@ -1,4 +1,5 @@
 """Per-PDF intermediate-file cache: PNG pages, per-page agent outputs."""
+
 from __future__ import annotations
 
 import json
@@ -159,9 +160,7 @@ def check_meta_matches(
     """Return a list of mismatch reasons; empty list means match."""
     reasons: list[str] = []
     if stored.pdf != pdf:
-        reasons.append(
-            f"pdf changed: cached={stored.pdf!r}, current={pdf!r}"
-        )
+        reasons.append(f"pdf changed: cached={stored.pdf!r}, current={pdf!r}")
     return reasons
 
 

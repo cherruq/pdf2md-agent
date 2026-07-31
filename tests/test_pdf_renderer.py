@@ -1,4 +1,5 @@
 """Tests for pdf2md_agent.pdf_renderer."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -3,6 +3,7 @@
 Personas are intentionally short so they fit comfortably inside the model's context window.
 The persona strings are exported as ``EXTRACTOR_PERSONA`` so the runner can budget their token cost before issuing each call.
 """
+
 from __future__ import annotations
 
 from crewai import Agent, LLM
@@ -56,4 +57,3 @@ __all__ = [
     "EXTRACTOR_PERSONA",
     "make_extractor",
 ]
-

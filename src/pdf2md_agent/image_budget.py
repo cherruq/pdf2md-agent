@@ -13,6 +13,7 @@ Implementation lives in two layers:
   :func:`_open_for_size` (with a bytes-derived fallback when Pillow
   cannot open the file) and a binary search over ``long_side``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -118,9 +119,9 @@ def _open_for_size(path: Path, *, fallback_bytes: int) -> tuple[int, int]:
         from PIL import Image  # type: ignore[import-not-found]
     except Exception:  # pragma: no cover - Pillow is a hard project dep
         log.warning(
-            "Pillow not importable in plan_for_image; using bytes-based "
-            "fallback (%d bytes) for %s",
-            fallback_bytes, path,
+            "Pillow not importable in plan_for_image; using bytes-based fallback (%d bytes) for %s",
+            fallback_bytes,
+            path,
         )
         return _bytes_to_fallback_size(fallback_bytes)
     try:
@@ -130,7 +131,9 @@ def _open_for_size(path: Path, *, fallback_bytes: int) -> tuple[int, int]:
         log.warning(
             "plan_for_image: cannot open %s to read size (%s); using "
             "bytes-based fallback (%d bytes) to keep planner sizing sane",
-            path, exc, fallback_bytes,
+            path,
+            exc,
+            fallback_bytes,
         )
         return _bytes_to_fallback_size(fallback_bytes)
 
@@ -185,13 +188,10 @@ def plan_for_image(
         raise ValueError(f"safety must be in (0, 1], got {safety!r}")
     if target_long_side < 1 or min_long_side < 1:
         raise ValueError(
-            f"target_long_side and min_long_side must be >= 1, got "
-            f"target={target_long_side}, min={min_long_side}"
+            f"target_long_side and min_long_side must be >= 1, got target={target_long_side}, min={min_long_side}"
         )
     if target_long_side < min_long_side:
-        raise ValueError(
-            f"target_long_side={target_long_side} < min_long_side={min_long_side}"
-        )
+        raise ValueError(f"target_long_side={target_long_side} < min_long_side={min_long_side}")
 
     limit = int(ctx_limit * safety)
     budget_for_image = max(0, limit - persona_tokens - fixed_text_tokens)
@@ -222,10 +222,7 @@ def plan_for_image(
             limit=limit,
             fits=False,
             needed_long_side=orig_long_side,
-            reason=(
-                f"image already smaller than min_long_side={min_long_side}; "
-                "fixed-text budget is too tight"
-            ),
+            reason=(f"image already smaller than min_long_side={min_long_side}; fixed-text budget is too tight"),
         )
 
     upper = orig_long_side
@@ -250,10 +247,7 @@ def plan_for_image(
             limit=limit,
             fits=total <= limit,
             needed_long_side=best,
-            reason=(
-                f"downscaled from {upper}px to {best}px to fit "
-                f"budget={budget_for_image} image tokens"
-            ),
+            reason=(f"downscaled from {upper}px to {best}px to fit budget={budget_for_image} image tokens"),
         )
 
     est_bytes = _est_size_at_long_side(original_bytes, upper, target_long_side)

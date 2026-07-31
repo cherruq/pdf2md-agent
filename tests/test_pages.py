@@ -1,4 +1,5 @@
 """Tests for pdf2md_agent.pages."""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +9,7 @@ from pdf2md_agent.pages import parse_page_spec, resolve_pages
 
 
 # --- parse_page_spec ---------------------------------------------------------
+
 
 def test_parse_single_page() -> None:
     assert parse_page_spec("3") == [3]
@@ -59,6 +61,7 @@ def test_parse_rejects_oversized_range() -> None:
 
 
 # --- resolve_pages -----------------------------------------------------------
+
 
 def test_resolve_sorts_and_dedupes() -> None:
     assert resolve_pages([3, 1, 2], total=10) == [1, 2, 3]

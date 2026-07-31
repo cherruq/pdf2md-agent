@@ -1,4 +1,5 @@
 """Tests for pdf2md_agent.cache."""
+
 from __future__ import annotations
 
 import json
@@ -51,9 +52,7 @@ def test_atomic_write_text_round_trip(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "hello world 中文"
 
 
-def test_write_meta_canonicalizes_relative_pdf_to_realpath(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_write_meta_canonicalizes_relative_pdf_to_realpath(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     meta = tmp_path / "meta.json"
     workdir = tmp_path / "sub"
     workdir.mkdir()

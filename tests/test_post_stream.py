@@ -8,6 +8,7 @@ last token until it sees the next one).
 
 These tests cover the heuristic-only path (no LLM calls).
 """
+
 from __future__ import annotations
 
 import re
@@ -22,6 +23,7 @@ from pdf2md_agent.post_stream import (
 
 
 # ---------- helpers ----------------------------------------------------------
+
 
 def _page(n: int, markdown: str) -> PageResult:
     return PageResult(page_number=n, markdown=markdown)
@@ -58,10 +60,7 @@ def test_mode_off_keeps_three_dashes_in_body() -> None:
 
 def test_split_paragraph_chinese_sentence() -> None:
     """GB/T 27930 A.3.6.1 case: page 1 ends mid-sentence, page 2 continues."""
-    p1 = (
-        "## A.3.6.1 充电阶段检测\n\n"
-        "车辆接口连接完成后，电动汽车应控制断开开关S3，电动汽车应通过检测点3"
-    )
+    p1 = "## A.3.6.1 充电阶段检测\n\n车辆接口连接完成后，电动汽车应控制断开开关S3，电动汽车应通过检测点3"
     p2 = "电压状态来识别车辆接口连接状态与可充电状态，状态定义按表A.1。"
     pages = [_page(1, p1), _page(2, p2)]
     out = stitch_pages(pages)
@@ -138,10 +137,7 @@ def test_split_table_row_unclosed() -> None:
         "| 1 | 2 | 3 |\n"
         "| 4 | 5 | 6"  # unclosed: no trailing |
     )
-    p2 = (
-        "| 7 | 8 | 9 |\n"
-        "| 10 | 11 | 12 |"
-    )
+    p2 = "| 7 | 8 | 9 |\n| 10 | 11 | 12 |"
     out = stitch_pages([_page(1, p1), _page(2, p2)])
     assert "\n\n---\n\n" not in out
     # The previously-unclosed row must be closed with " |"
@@ -154,15 +150,11 @@ def test_split_table_row_unclosed() -> None:
 
 def test_split_table_with_duplicate_header_drops_header() -> None:
     """When page 2 includes a redundant table header, drop it."""
-    p1 = (
-        "| A | B |\n"
-        "|---|---|\n"
-        "| 1 | 2"
-    )  # unclosed
+    p1 = "| A | B |\n|---|---|\n| 1 | 2"  # unclosed
     p2 = (
-        "| A | B |\n"           # duplicate header
-        "|---|---|\n"           # duplicate separator
-        "| 3 | 4 |"             # new row
+        "| A | B |\n"  # duplicate header
+        "|---|---|\n"  # duplicate separator
+        "| 3 | 4 |"  # new row
     )
     out = stitch_pages([_page(1, p1), _page(2, p2)])
     assert "\n\n---\n\n" not in out
@@ -177,11 +169,7 @@ def test_split_table_with_duplicate_header_drops_header() -> None:
 
 def test_split_table_no_header_repeats() -> None:
     """Page 2 starts directly with body rows (no duplicate header) — keep all."""
-    p1 = (
-        "| A | B |\n"
-        "|---|---|\n"
-        "| 1 | 2"
-    )
+    p1 = "| A | B |\n|---|---|\n| 1 | 2"
     p2 = "| 3 | 4 |\n| 5 | 6 |"
     out = stitch_pages([_page(1, p1), _page(2, p2)])
     assert "\n\n---\n\n" not in out
@@ -199,8 +187,7 @@ def test_empty_page_does_not_break_buffer() -> None:
     p3 = "continues here."
     out = stitch_pages([_page(1, p1), _page(2, p2), _page(3, p3)])
     assert "---" not in out
-    assert "Unfinished paragraph textcontinues here." in out or \
-           "Unfinished paragraph text continues here." in out
+    assert "Unfinished paragraph textcontinues here." in out or "Unfinished paragraph text continues here." in out
 
 
 def test_whitespace_only_page_ignored() -> None:
@@ -320,17 +307,8 @@ def test_cross_page_join_with_trailing_blocks_preserved() -> None:
     * Page 2 starts with the continuation, followed by P05, P06, P07.
     * Without the fix, the joined P04 was silently overwritten by P07.
     """
-    p1 = (
-        "【P01】First paragraph.\n\n"
-        "【P02】Second paragraph.\n\n"
-        "【P04-跨页验证】这一段专门承担跨页连续性测试，"
-    )
-    p2 = (
-        "既不重复页底已经出现的内容。\n\n"
-        "【P05】Another paragraph.\n\n"
-        "【P06】Yet another.\n\n"
-        "【P07】Last on this page."
-    )
+    p1 = "【P01】First paragraph.\n\n【P02】Second paragraph.\n\n【P04-跨页验证】这一段专门承担跨页连续性测试，"
+    p2 = "既不重复页底已经出现的内容。\n\n【P05】Another paragraph.\n\n【P06】Yet another.\n\n【P07】Last on this page."
     out = stitch_pages([_page(1, p1), _page(2, p2)])
     # P04 must survive the join — it must NOT be silently dropped.
     assert "【P04-跨页验证】" in out, "P04 was silently dropped by the stitcher"
@@ -366,10 +344,7 @@ def test_cross_page_table_join_with_trailing_blocks() -> None:
         "|---|---|\n"
         "| 1 | 2"  # unclosed
     )
-    p2 = (
-        "| 3 | 4 |\n\n"
-        "A regular paragraph after the table."
-    )
+    p2 = "| 3 | 4 |\n\nA regular paragraph after the table."
     out = stitch_pages([_page(1, p1), _page(2, p2)])
     # The table must survive, with the unclosed row closed.
     assert "| 1 | 2 |" in out
@@ -380,16 +355,8 @@ def test_cross_page_table_join_with_trailing_blocks() -> None:
 
 def test_step3_cleans_headers_footers_and_page_numbers() -> None:
     """Step 3 must remove repeating running headers/footers and standalone page numbers."""
-    p1 = (
-        "CONFIDENTIAL - Internal Use Only\n\n"
-        "This is the first page content.\n\n"
-        "- 1 -"
-    )
-    p2 = (
-        "CONFIDENTIAL - Internal Use Only\n\n"
-        "This is the second page content.\n\n"
-        "Page 2"
-    )
+    p1 = "CONFIDENTIAL - Internal Use Only\n\nThis is the first page content.\n\n- 1 -"
+    p2 = "CONFIDENTIAL - Internal Use Only\n\nThis is the second page content.\n\nPage 2"
     out = step3_stitch_and_clean([_page(1, p1), _page(2, p2)])
     assert "CONFIDENTIAL - Internal Use Only" not in out
     assert "- 1 -" not in out

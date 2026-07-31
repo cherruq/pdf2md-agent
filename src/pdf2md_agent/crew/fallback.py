@@ -10,6 +10,7 @@ isolates:
 * :func:`_record_text_layer_fallback` — write the stub into
   the page's format artifacts and return a :class:`PageResult`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,10 +33,7 @@ def _text_layer_fallback(artifacts: PageArtifacts) -> str:
     """
     text = read_page_text(artifacts.page_text).strip()
     if not text:
-        return (
-            "*(vision model unavailable and PDF text layer is empty for this "
-            "page — no content recovered)*"
-        )
+        return "*(vision model unavailable and PDF text layer is empty for this page — no content recovered)*"
     return (
         "*(vision model unavailable — falling back to PDF text layer; "
         "tables, figures, and layout are NOT preserved)*\n\n"

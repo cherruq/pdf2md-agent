@@ -13,6 +13,7 @@ external tokenizer (``tiktoken`` is forbidden by the project
 guidelines) and they over-estimate so a budget-passing call is
 guaranteed to fit in practice.
 """
+
 from __future__ import annotations
 
 import logging
@@ -103,9 +104,7 @@ def estimate_image_tokens(path_or_bytes: PathOrBytes, *, mime: str = "image/jpeg
     elif isinstance(path_or_bytes, (bytes, bytearray)):
         size = len(path_or_bytes)
     else:
-        raise TypeError(
-            f"estimate_image_tokens: unsupported type {type(path_or_bytes).__name__}"
-        )
+        raise TypeError(f"estimate_image_tokens: unsupported type {type(path_or_bytes).__name__}")
 
     b64_chars = ((size + 2) // 3) * 4
     return max(1, math.ceil(b64_chars / _IMAGE_BYTES_PER_TOKEN))

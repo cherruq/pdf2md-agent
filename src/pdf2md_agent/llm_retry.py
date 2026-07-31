@@ -19,6 +19,7 @@ markdown from the PDF's native text layer (no vision model required).
 
 Public API: :class:`RetryConfig`, :func:`is_transient`, :func:`call_with_retry`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -237,9 +238,7 @@ def call_with_retry(
     failures are retried indefinitely; non-transient failures always
     propagate immediately, regardless of the cap.
     """
-    bound = (
-        str(config.max_attempts) if config.max_attempts is not None else "\u221e"
-    )
+    bound = str(config.max_attempts) if config.max_attempts is not None else "\u221e"
     last_exc: Exception | None = None
     fib_multipliers = _fibonacci_multipliers()
     attempt = 0
@@ -254,13 +253,18 @@ def call_with_retry(
             _ = exc
             log.warning(
                 "%s: attempt %d/%s timed out after %.1fs; treating as transient",
-                label, attempt, bound, timeout_seconds,
+                label,
+                attempt,
+                bound,
+                timeout_seconds,
             )
             last_exc = APITimeoutError(request=_dummy_request())
             if config.max_attempts is not None and attempt >= config.max_attempts:
                 log.error(
                     "%s: giving up after %d attempt(s): %s",
-                    label, attempt, _safe_exc_summary(last_exc),
+                    label,
+                    attempt,
+                    _safe_exc_summary(last_exc),
                 )
                 raise last_exc
             _sleep_and_continue(label, attempt, bound, last_exc, config, fib_multipliers, sleep)
@@ -271,7 +275,9 @@ def call_with_retry(
             if config.max_attempts is not None and attempt >= config.max_attempts:
                 log.error(
                     "%s: giving up after %d attempt(s): %s",
-                    label, attempt, _safe_exc_summary(exc),
+                    label,
+                    attempt,
+                    _safe_exc_summary(exc),
                 )
                 raise
             _sleep_and_continue(label, attempt, bound, exc, config, fib_multipliers, sleep)
@@ -293,8 +299,12 @@ def _sleep_and_continue(
     wait = _compute_fibonacci_wait(config, next(fib_multipliers))
     log.info(
         "%s: retrying after transient %s on attempt %d/%s (%s); sleeping %.2fs",
-        label, type(exc).__name__, attempt, bound,
-        _safe_exc_summary(exc), wait,
+        label,
+        type(exc).__name__,
+        attempt,
+        bound,
+        _safe_exc_summary(exc),
+        wait,
     )
     sleep(wait)
 

@@ -1,4 +1,5 @@
 """Convert PDF documents to markdown via a CrewAI vision pipeline."""
+
 from __future__ import annotations
 
 __version__ = "0.2.1"

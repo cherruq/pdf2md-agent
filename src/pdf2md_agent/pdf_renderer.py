@@ -170,9 +170,7 @@ def render_pages(config: ConversionConfig) -> list[RenderedPage]:
                     jpg_path.unlink(missing_ok=True)
 
             if need_png or not text_valid:
-                pages.append(
-                    _render_single_page(page, n, png, txt, matrix, extracted_text=new_text)
-                )
+                pages.append(_render_single_page(page, n, png, txt, matrix, extracted_text=new_text))
             else:
                 # 有效分支：缓存直接可用
                 with Image.open(png) as img:

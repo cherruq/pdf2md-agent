@@ -1,4 +1,5 @@
 """Project configuration loaded from environment variables at import time."""
+
 from __future__ import annotations
 
 import functools
@@ -77,9 +78,7 @@ def require_api_key() -> str:
     """Return the OpenAI API key from the environment, or raise with guidance."""
     value = _env("OPENAI_API_KEY")
     if not value:
-        raise RuntimeError(
-            "OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in."
-        )
+        raise RuntimeError("OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in.")
     return value
 
 
@@ -108,9 +107,7 @@ def resolve_ctx_limit() -> int:
         try:
             value = int(raw)
             if value > 0:
-                log.info(
-                    "ctx_limit: %d (from PDF2MD_AGENT_CTX_LIMIT env var)", value
-                )
+                log.info("ctx_limit: %d (from PDF2MD_AGENT_CTX_LIMIT env var)", value)
                 return value
         except ValueError:
             pass
@@ -121,9 +118,9 @@ def resolve_ctx_limit() -> int:
         return hardcoded
 
     log.warning(
-        "ctx_limit: %d (generic fallback; model %r is unknown — "
-        "set PDF2MD_AGENT_CTX_LIMIT to silence this warning)",
-        _DEFAULT_CTX_LIMIT, MODEL_NAME,
+        "ctx_limit: %d (generic fallback; model %r is unknown — set PDF2MD_AGENT_CTX_LIMIT to silence this warning)",
+        _DEFAULT_CTX_LIMIT,
+        MODEL_NAME,
     )
     return _DEFAULT_CTX_LIMIT
 
@@ -132,17 +129,13 @@ TOKEN_BUDGET_SAFETY: Final[float] = TOKEN_BUDGET_SAFETY_DEFAULT
 IMAGE_LONG_SIDE: Final[int] = DEFAULT_IMAGE_LONG_SIDE
 IMAGE_JPEG_QUALITY: Final[int] = DEFAULT_IMAGE_JPEG_QUALITY
 
-REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float(
-    "PDF2MD_AGENT_REQUEST_TIMEOUT", 60.0
-)
+REQUEST_TIMEOUT_SECONDS: Final[float] = _env_positive_float("PDF2MD_AGENT_REQUEST_TIMEOUT", 60.0)
 
 
 # --- LLM retry + fallback ---------------------------------------------------
 
 
-RETRY_MAX_ATTEMPTS: Final[int | None] = _env_int_or_unlimited(
-    "PDF2MD_AGENT_MAX_RETRIES"
-)
+RETRY_MAX_ATTEMPTS: Final[int | None] = _env_int_or_unlimited("PDF2MD_AGENT_MAX_RETRIES")
 RETRY_INITIAL_DELAY: Final[float] = 1.0
 RETRY_MAX_DELAY: Final[float] = 900.0
 RETRY_JITTER: Final[float] = 0.25

@@ -1,14 +1,12 @@
 """Per-page CrewAI pipeline orchestrator."""
+
 from __future__ import annotations
 
 import logging
 import time
 from crewai import LLM
-from pydantic import ValidationError
 
 from pdf2md_agent.cache import (
-    CacheLayout,
-    CacheNoCacheFlags,
     is_page_complete,
 )
 from pdf2md_agent.config import (
@@ -34,12 +32,6 @@ from pdf2md_agent.crew.tasks import (  # noqa: F401  re-exports kept for backwar
     make_extract_task,
 )
 from crewai import Crew, Process  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.Crew` without `create=True`
-from pdf2md_agent.llm_retry import (
-    RetryConfig,
-    _safe_exc_summary,
-    call_with_retry,
-    is_transient,
-)
 from pdf2md_agent.pdf_renderer import RenderedPage, read_page_text, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.RenderedPage` / `.render_pdf` without `create=True`
 from pdf2md_agent.vision import make_vision_llm  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.make_vision_llm` without `create=True`
 
@@ -65,7 +57,9 @@ def _process_single_page(
         cached_md = artifacts.format_markdown.read_text(encoding="utf-8").strip()
         log.info(
             "  [%d/%d] page %d: cached, skipping",
-            idx, total, page.page_number,
+            idx,
+            total,
+            page.page_number,
         )
         return PageResult(page.page_number, cached_md), False
 
@@ -100,10 +94,13 @@ def _process_single_page(
     elapsed = time.monotonic() - prepared.page_started
     log.info(
         "  [%d/%d] page %d: done in %.1fs (%s chars)",
-        idx, total, page.page_number, elapsed, f"{len(outcome.format_md):,}",
+        idx,
+        total,
+        page.page_number,
+        elapsed,
+        f"{len(outcome.format_md):,}",
     )
     return PageResult(page.page_number, outcome.format_md), False
-
 
 
 def run_pipeline(
@@ -124,7 +121,10 @@ def run_pipeline(
     fallback_pages: list[int] = []
     log.info(
         "pipeline started: pages=%d, dpi=%d, model=%s, no_cache=%s",
-        total, config.dpi, MODEL_NAME, config.no_cache.as_dict(),
+        total,
+        config.dpi,
+        MODEL_NAME,
+        config.no_cache.as_dict(),
     )
 
     for idx, page in enumerate(pages, start=1):
@@ -142,12 +142,16 @@ def run_pipeline(
     total_elapsed = time.monotonic() - pipeline_started
     log.info(
         "pipeline complete: %d page(s) in %.1fs (%.1fs avg)",
-        total, total_elapsed, total_elapsed / max(total, 1),
+        total,
+        total_elapsed,
+        total_elapsed / max(total, 1),
     )
     if fallback_pages:
         log.info(
             "run complete: %d pages, %d used fallback (text layer): %s",
-            total, len(fallback_pages), fallback_pages,
+            total,
+            len(fallback_pages),
+            fallback_pages,
         )
     return results
 

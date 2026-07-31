@@ -1,4 +1,5 @@
 """Internal tuning policy and static default constants for pipeline optimization."""
+
 from __future__ import annotations
 
 from typing import Final

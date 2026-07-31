@@ -1,4 +1,5 @@
 """argparse builder and CLI argument post-processing."""
+
 from __future__ import annotations
 
 import argparse
@@ -54,13 +55,9 @@ def _request_timeout_type(raw: str) -> float:
     try:
         value = float(raw)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"--request-timeout must be a number, got {raw!r}"
-        ) from exc
+        raise argparse.ArgumentTypeError(f"--request-timeout must be a number, got {raw!r}") from exc
     if not 0.1 <= value <= 600.0:
-        raise argparse.ArgumentTypeError(
-            f"--request-timeout must be in [0.1, 600], got {value}"
-        )
+        raise argparse.ArgumentTypeError(f"--request-timeout must be in [0.1, 600], got {value}")
     return value
 
 
@@ -69,13 +66,9 @@ def _positive_int_type(name: str, minimum: int) -> Callable[[str], int]:
         try:
             value = int(raw)
         except ValueError as exc:
-            raise argparse.ArgumentTypeError(
-                f"--{name} must be an integer, got {raw!r}"
-            ) from exc
+            raise argparse.ArgumentTypeError(f"--{name} must be an integer, got {raw!r}") from exc
         if value < minimum:
-            raise argparse.ArgumentTypeError(
-                f"--{name} must be >= {minimum}, got {value}"
-            )
+            raise argparse.ArgumentTypeError(f"--{name} must be >= {minimum}, got {value}")
         return value
 
     return _parser
@@ -85,9 +78,7 @@ def _safe_intermediates_dir(value: str) -> Path:
     """argparse validator for ``--intermediates-dir``, rejecting '..' segments."""
     p = Path(value)
     if any(part == ".." for part in p.parts):
-        raise argparse.ArgumentTypeError(
-            f"--intermediates-dir must not contain '..' segments: {value!r}"
-        )
+        raise argparse.ArgumentTypeError(f"--intermediates-dir must not contain '..' segments: {value!r}")
     return p
 
 
@@ -107,11 +98,7 @@ def _resolve_layout(
     pdf: Path,
     override: Path | None,
 ) -> tuple[CacheLayout, Path]:
-    root = (
-        override
-        if override is not None
-        else Path(".pdf2md-agent-cache") / cache_key_for_pdf(pdf)
-    )
+    root = override if override is not None else Path(".pdf2md-agent-cache") / cache_key_for_pdf(pdf)
     return CacheLayout.for_pdf(root, pdf), root / "pages"
 
 
@@ -129,11 +116,7 @@ def build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
         cli_max_attempts = None
     try:
         return RetryConfig(
-            max_attempts=(
-                cli_max_attempts
-                if cli_max_attempts is not None
-                else RETRY_MAX_ATTEMPTS
-            ),
+            max_attempts=(cli_max_attempts if cli_max_attempts is not None else RETRY_MAX_ATTEMPTS),
             initial_delay=RETRY_INITIAL_DELAY,
             max_delay=RETRY_MAX_DELAY,
             jitter=RETRY_JITTER,
@@ -184,7 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     pipeline.add_argument(
-        "-p", "--pages",
+        "-p",
+        "--pages",
         type=parse_page_spec,
         default=None,
         metavar="SPEC",
@@ -222,8 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         dest="no_cache_all",
         help=(
-            "Disable every cache reuse (render/text/resized/format). "
-            "Equivalent to passing all four --no-cache-* flags."
+            "Disable every cache reuse (render/text/resized/format). Equivalent to passing all four --no-cache-* flags."
         ),
     )
 
@@ -274,10 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int_type("image-quality", 1),
         default=None,
         metavar="Q",
-        help=(
-            "JPEG quality (1-100) used when downsampling page images. "
-            "Default: 85."
-        ),
+        help=("JPEG quality (1-100) used when downsampling page images. Default: 85."),
     )
     tuning.add_argument(
         "--ctx-limit",
@@ -295,7 +275,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "-V", "--version",
+        "-V",
+        "--version",
         action=_VersionAction,
         nargs=0,
         help="Print the pdf2md-agent version and exit.",

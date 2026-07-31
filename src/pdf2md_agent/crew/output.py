@@ -10,6 +10,7 @@ small concerns:
 * :func:`_output` — pull the ``raw`` field off a task's output object,
   coercing to ``str`` and stripping think blocks in one place.
 """
+
 from __future__ import annotations
 
 import re

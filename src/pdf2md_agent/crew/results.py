@@ -1,4 +1,5 @@
 """Per-page result type shared across the crew package."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

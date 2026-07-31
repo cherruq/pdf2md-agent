@@ -25,6 +25,11 @@ packages = ["src/pdf2md_agent"]
 [dependency-groups]
 dev = ["pytest>=8,<9"]
 
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

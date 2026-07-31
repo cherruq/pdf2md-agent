@@ -1,4 +1,5 @@
 """Tests for the ``--no-cache-*`` family and ``CacheNoCacheFlags`` plumbing."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -99,9 +100,7 @@ def test_resume_and_reformat_flags_rejected() -> None:
 
 def test_resolve_no_cache_flags_mirrors_args() -> None:
     parser = cli.build_parser()
-    args = parser.parse_args(
-        ["in.pdf", "-o", "out.md", "--no-cache-format", "--no-cache-text"]
-    )
+    args = parser.parse_args(["in.pdf", "-o", "out.md", "--no-cache-format", "--no-cache-text"])
     flags = cli._resolve_no_cache_flags(args)
     assert flags == CacheNoCacheFlags(format=True, text=True)
 
@@ -119,26 +118,18 @@ def test_cache_no_cache_flags_all_false_for_partial(flags: CacheNoCacheFlags) ->
 
 
 def test_cache_no_cache_flags_all_true_only_when_every_flag_set() -> None:
-    assert CacheNoCacheFlags(
-        render=True, text=True, resized=True, format=True
-    ).all() is True
+    assert CacheNoCacheFlags(render=True, text=True, resized=True, format=True).all() is True
 
 
 # --- per-page priority matrix ----------------------------------------------
 
 
 def _seed_complete_page(layout: CacheLayout, page_number: int) -> None:
-    layout.page_format_path(page_number).write_text(
-        "final md", encoding="utf-8"
-    )
-    layout.page_text_path(page_number).write_text(
-        "text hint", encoding="utf-8"
-    )
+    layout.page_format_path(page_number).write_text("final md", encoding="utf-8")
+    layout.page_text_path(page_number).write_text("text hint", encoding="utf-8")
 
 
-def test_no_cache_format_reruns_full_pipeline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_cache_format_reruns_full_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     page = _page(1)
     layout = _layout(tmp_path, 1)
     _seed_complete_page(layout, 1)
@@ -150,9 +141,11 @@ def test_no_cache_format_reruns_full_pipeline(
     def _track(*_args: object, **_kwargs: object) -> None:
         calls.append("kickoff")
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t), \
-         patch.object(runner, "Crew") as crew_cls:
+    with (
+        patch.object(runner, "make_extractor"),
+        patch.object(runner, "make_extract_task", return_value=extract_t),
+        patch.object(runner, "Crew") as crew_cls,
+    ):
         crew_cls.return_value.kickoff = _track
         results = run_pipeline(
             pages=[page],
@@ -175,9 +168,11 @@ def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
     def _track() -> None:
         kickoff_calls.append(None)
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_extract_task"), \
-         patch.object(runner, "Crew") as crew_cls:
+    with (
+        patch.object(runner, "make_extractor"),
+        patch.object(runner, "make_extract_task"),
+        patch.object(runner, "Crew") as crew_cls,
+    ):
         crew_cls.return_value.kickoff = _track
         results = run_pipeline(
             pages=[page],

@@ -1,4 +1,5 @@
 """CLI entry point for pdf2md-agent."""
+
 from __future__ import annotations
 
 import argparse
@@ -85,9 +86,7 @@ def _validate_pdf_header(pdf: Path) -> int | None:
     return None
 
 
-def _resolve_requested_pages(
-    pdf: Path, pages_spec: object
-) -> tuple[list[int] | None, int | None]:
+def _resolve_requested_pages(pdf: Path, pages_spec: object) -> tuple[list[int] | None, int | None]:
     """Validate ``pages_spec`` against the PDF's page count."""
     if pages_spec is None:
         return None, None

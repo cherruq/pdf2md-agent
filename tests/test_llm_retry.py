@@ -1,4 +1,5 @@
 """Tests for pdf2md_agent.llm_retry."""
+
 from __future__ import annotations
 
 import httpx
@@ -80,12 +81,8 @@ def test_retry_config_rejects_invalid_kwargs(kwargs: dict) -> None:
 def test_is_transient_true_for_known_transient() -> None:
     assert is_transient(APITimeoutError(request=_request()))
     assert is_transient(APIConnectionError(request=_request()))
-    assert is_transient(
-        InternalServerError(message="boom", response=_response(500), body=None)
-    )
-    assert is_transient(
-        RateLimitError(message="slow down", response=_response(429), body=None)
-    )
+    assert is_transient(InternalServerError(message="boom", response=_response(500), body=None))
+    assert is_transient(RateLimitError(message="slow down", response=_response(429), body=None))
 
 
 def test_is_transient_true_for_5xx_status() -> None:
@@ -241,9 +238,7 @@ def test_call_with_retry_fibonacci_sequence_for_5_retries() -> None:
     with pytest.raises(APITimeoutError):
         call_with_retry(
             fn,
-            config=RetryConfig(
-                max_attempts=7, initial_delay=2.0, max_delay=900.0, jitter=0.0
-            ),
+            config=RetryConfig(max_attempts=7, initial_delay=2.0, max_delay=900.0, jitter=0.0),
             sleep=sleeps.append,
         )
     assert len(attempts) == 7
@@ -263,9 +258,7 @@ def test_call_with_retry_fibonacci_caps_at_max_delay() -> None:
     with pytest.raises(APITimeoutError):
         call_with_retry(
             fn,
-            config=RetryConfig(
-                max_attempts=6, initial_delay=2.0, max_delay=7.0, jitter=0.0
-            ),
+            config=RetryConfig(max_attempts=6, initial_delay=2.0, max_delay=7.0, jitter=0.0),
             sleep=sleeps.append,
         )
     # F[1..5] = [1, 1, 2, 3, 5] × 2 = [2, 2, 4, 6, 10] → last capped at 7.0

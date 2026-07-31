@@ -1,4 +1,5 @@
 """Tests for pdf2md_agent.vision (LLM factory wiring)."""
+
 from __future__ import annotations
 
 import pytest

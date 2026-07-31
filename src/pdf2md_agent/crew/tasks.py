@@ -1,4 +1,5 @@
 """Per-page task factories: extract → format."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,8 +15,14 @@ patch_add_image_tool()
 
 _NO_REASONING = (
     "Output ONLY final content; no reasoning, preamble, or "
-    + chr(60) + "think" + chr(62) + "..."
-    + chr(60) + "/think" + chr(62) + " blocks."
+    + chr(60)
+    + "think"
+    + chr(62)
+    + "..."
+    + chr(60)
+    + "/think"
+    + chr(62)
+    + " blocks."
 )
 
 _LANG_RULE = (
@@ -108,4 +115,3 @@ def make_extract_task(
         expected_output="Clean CommonMark markdown transcription of the page, verbatim language preserved",
         agent=extractor,
     )
-

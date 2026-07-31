@@ -41,6 +41,7 @@ The signature is intentionally unchanged — tests patch
 invalidate those patch targets. The id-emponent install (only the first
 call actually installs the patched ``_run``) is preserved verbatim.
 """
+
 from __future__ import annotations
 
 import base64
@@ -102,7 +103,9 @@ def _encode_local_image(
             return buf.getvalue()
     except (FileNotFoundError, OSError, UnidentifiedImageError) as exc:
         log.warning(
-            "_encode_local_image: cannot encode %s: %s", path, exc,
+            "_encode_local_image: cannot encode %s: %s",
+            path,
+            exc,
         )
         raise ImageEncodeError(f"cannot encode image {path}: {exc}") from exc
 

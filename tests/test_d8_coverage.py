@@ -19,6 +19,7 @@ and ``tests/test_cache.py::test_atomic_write_text_*``.
 D8-012 is strengthened in-place in ``tests/test_runner.py`` (kept there so the
 test sits next to the seam it guards).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,6 @@ from PIL import Image
 from pdf2md_agent import cli, pdf_renderer, pipeline
 from pdf2md_agent.cache import CacheLayout
 from pdf2md_agent.cli import _resolve_layout
-from pdf2md_agent.crew import agents
 from pdf2md_agent.crew.multimodal_patch import (
     _encode_local_image,
     _to_data_url,
@@ -76,9 +76,7 @@ def _write_png(path: Path, *, width: int, height: int, color: str = "red") -> Pa
 # ===========================================================================
 
 
-def test_resolve_layout_default_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_layout_default_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Default root is the literal relative ``.pdf2md-agent-cache/<safe_stem>``."""
     monkeypatch.chdir(tmp_path)
     pdf = tmp_path / "report.pdf"
@@ -156,21 +154,31 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     args = _build_minimal_args(tmp_path, pdf)
 
     from PIL import Image
+
     pages_dir = tmp_path / ".pdf2md-agent-cache" / "in" / "pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
     png_path = pages_dir / "page_0001.png"
     Image.new("RGB", (72, 72), "white").save(png_path, "PNG")
     page = RenderedPage(
-        page_number=1, width=72, height=72, image_path=png_path,
+        page_number=1,
+        width=72,
+        height=72,
+        image_path=png_path,
     )
 
-    with patch.object(pdf_renderer, "render_pdf", return_value=[page]) as mock_render, \
-         patch.object(pipeline, "make_vision_llm", return_value=object()), \
-         patch.object(pipeline, "run_pipeline", return_value=[
-             PageResult(page_number=1, markdown="# Title\n\n- item\n"),
-         ]) as mock_run, \
-         patch.object(pipeline, "stitch_pages", return_value="# Title\n\n- item\n") as mock_stitch, \
-         patch.object(pipeline, "write_meta") as mock_write_meta:
+    with (
+        patch.object(pdf_renderer, "render_pdf", return_value=[page]) as mock_render,
+        patch.object(pipeline, "make_vision_llm", return_value=object()),
+        patch.object(
+            pipeline,
+            "run_pipeline",
+            return_value=[
+                PageResult(page_number=1, markdown="# Title\n\n- item\n"),
+            ],
+        ) as mock_run,
+        patch.object(pipeline, "stitch_pages", return_value="# Title\n\n- item\n") as mock_stitch,
+        patch.object(pipeline, "write_meta") as mock_write_meta,
+    ):
         rc = cli.cmd_convert(args)
 
     assert rc == 0
@@ -179,14 +187,10 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     assert mock_write_meta.called
     assert mock_run.call_count == 1
     assert mock_stitch.call_count == 1
-    assert mock_render.call_count == 0, (
-        "trust-cache path must not re-render when PNG already on disk"
-    )
+    assert mock_render.call_count == 0, "trust-cache path must not re-render when PNG already on disk"
 
 
-def test_cmd_convert_missing_pdf_returns_1(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cmd_convert_missing_pdf_returns_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Missing PDF exits 1 with a stderr message — no crash, no partial output."""
     args = _build_minimal_args(tmp_path, tmp_path / "absent.pdf")
     rc = cli.cmd_convert(args)
@@ -218,30 +222,39 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
     args.output = out_path
 
     page = RenderedPage(
-        page_number=1, width=72, height=72, image_path=tmp_path / "page_0001.png",
+        page_number=1,
+        width=72,
+        height=72,
+        image_path=tmp_path / "page_0001.png",
     )
     layout = CacheLayout.for_pdf(tmp_path / ".pdf2md-agent-cache" / "in", pdf)
 
-    with patch.object(pdf_renderer, "render_pdf", return_value=[page]) as mock_render, \
-         patch.object(pipeline, "make_vision_llm", return_value=object()), \
-         patch.object(pipeline, "run_pipeline", return_value=[
-             PageResult(page_number=1, markdown="stitched body"),
-         ]), \
-         patch.object(pipeline, "stitch_pages", return_value="stitched body") as mock_stitch, \
-         patch.object(pipeline, "atomic_write_text") as mock_atomic, \
-         patch.object(pipeline, "write_meta"):
+    with (
+        patch.object(pdf_renderer, "render_pdf", return_value=[page]) as mock_render,
+        patch.object(pipeline, "make_vision_llm", return_value=object()),
+        patch.object(
+            pipeline,
+            "run_pipeline",
+            return_value=[
+                PageResult(page_number=1, markdown="stitched body"),
+            ],
+        ),
+        patch.object(pipeline, "stitch_pages", return_value="stitched body") as mock_stitch,
+        patch.object(pipeline, "atomic_write_text") as mock_atomic,
+        patch.object(pipeline, "write_meta"),
+    ):
         layout.pages_dir.mkdir(parents=True, exist_ok=True)
         from PIL import Image as _PIL
+
         _PIL.new("RGB", (72, 72), "white").save(layout.pages_dir / "page_0001.png", "PNG")
         from pdf2md_agent.cache import CacheNoCacheFlags
+
         rc = cli._run_pipeline(
             args=args,
             layout=layout,
             render_target=layout.pages_dir,
             resolved_pages=None,
-            retry_config=__import__(
-                "pdf2md_agent.llm_retry", fromlist=["RetryConfig"]
-            ).RetryConfig(),
+            retry_config=__import__("pdf2md_agent.llm_retry", fromlist=["RetryConfig"]).RetryConfig(),
             fallback_to_text=True,
             started=__import__("time").monotonic(),
             no_cache=CacheNoCacheFlags(),
@@ -307,7 +320,9 @@ def _make_page_artifacts(tmp_path: Path, page_number: int, text: str):
     """Build a ``PageArtifacts`` with a populated ``page_text.txt`` for fallback testing."""
     layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "x.pdf")
     page = RenderedPage(
-        page_number=page_number, width=100, height=100,
+        page_number=page_number,
+        width=100,
+        height=100,
         image_path=tmp_path / "page.png",
     )
     artifacts = layout.artifacts_for(page)
@@ -320,7 +335,10 @@ def test_record_text_layer_fallback_writes_format(tmp_path: Path) -> None:
     artifacts = _make_page_artifacts(tmp_path, 1, "raw pdf text\n")
 
     result = _record_text_layer_fallback(
-        idx=1, total=1, page_number=1, page_started=0.0,
+        idx=1,
+        total=1,
+        page_number=1,
+        page_started=0.0,
         artifacts=artifacts,
         completion_label="fallback",
     )
@@ -335,7 +353,10 @@ def test_record_text_layer_fallback_returns_consistent_page_result(tmp_path: Pat
     """``PageResult`` shape preserves page_number."""
     artifacts = _make_page_artifacts(tmp_path, 7, "page 7 text\n")
     result = _record_text_layer_fallback(
-        idx=7, total=10, page_number=7, page_started=0.0,
+        idx=7,
+        total=10,
+        page_number=7,
+        page_started=0.0,
         artifacts=artifacts,
         completion_label="validation-fallback",
     )
@@ -533,10 +554,7 @@ def test_to_sentinel_b64_decodes_round_trip(tmp_path: Path) -> None:
 def test_to_sentinel_returns_action_or_fallback_for_remote_url() -> None:
     """URL inputs (no inline) yield the action text (or a clear fallback message)."""
     # With action: action text is surfaced.
-    assert (
-        _to_sentinel("https://example.test/x.png", action="caption text")
-        == "caption text"
-    )
+    assert _to_sentinel("https://example.test/x.png", action="caption text") == "caption text"
     # Without action: a clear '(could not inline image at <url>)' marker.
     sentinel = _to_sentinel("https://example.test/x.png", action=None)
     assert "could not inline image" in sentinel
@@ -558,9 +576,7 @@ def test_call_with_retry_treats_timeout_as_transient(caplog) -> None:
     with pytest.raises(APITimeoutError):
         call_with_retry(
             _slow_fn,
-            config=RetryConfig(
-                max_attempts=1, initial_delay=0.001, jitter=0.0
-            ),
+            config=RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
             timeout_seconds=0.05,
             sleep=lambda _w: None,
         )
@@ -586,14 +602,11 @@ def test_call_with_retry_timeout_actually_bounds_wall_clock() -> None:
     with pytest.raises(APITimeoutError):
         call_with_retry(
             _hung_fn,
-            config=RetryConfig(
-                max_attempts=1, initial_delay=0.001, jitter=0.0
-            ),
+            config=RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
             timeout_seconds=0.2,
             sleep=lambda _w: None,
         )
     elapsed = _time.monotonic() - start
     assert elapsed < 1.0, (
-        f"timeout-guard did not bound the caller: elapsed={elapsed:.3f}s "
-        f"(should be <1.0s for timeout_seconds=0.2s)"
+        f"timeout-guard did not bound the caller: elapsed={elapsed:.3f}s (should be <1.0s for timeout_seconds=0.2s)"
     )

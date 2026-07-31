@@ -1,4 +1,5 @@
 """Per-page extraction loop: build crew, kickoff, optionally reflect on coverage."""
+
 from __future__ import annotations
 
 import difflib
@@ -44,8 +45,6 @@ class ExtractionOutcome:
 def _clean_for_coverage(text: str) -> str:
     """Drop all whitespace for a cheap character-coverage comparison."""
     return re.sub(r"\s+", "", text)
-
-
 
 
 def _build_crew(
@@ -102,10 +101,13 @@ def _maybe_reflect(
         return False, ""
 
     log.warning(
-        "  [%d/%d] page %d: poor text coverage (%.2f < %.2f); "
-        "triggering reflection %d",
-        idx, total, page.page_number,
-        coverage, _REFLECTION_COVERAGE_THRESHOLD, reflection_attempts + 1,
+        "  [%d/%d] page %d: poor text coverage (%.2f < %.2f); triggering reflection %d",
+        idx,
+        total,
+        page.page_number,
+        coverage,
+        _REFLECTION_COVERAGE_THRESHOLD,
+        reflection_attempts + 1,
     )
     return True, _PENALTY_PROMPT
 
@@ -143,11 +145,7 @@ def run_extraction_loop(
                 config=config.retry_config,
                 label=(
                     f"page {page.page_number}"
-                    + (
-                        f" (reflection {reflection_attempts})"
-                        if reflection_attempts > 0
-                        else ""
-                    )
+                    + (f" (reflection {reflection_attempts})" if reflection_attempts > 0 else "")
                 ),
                 timeout_seconds=config.request_timeout_seconds,
             )
@@ -157,18 +155,23 @@ def run_extraction_loop(
             log.warning(
                 "  [%d/%d] page %d: model returned malformed response "
                 "(%s, %d validation error(s)); falling back to text layer",
-                idx, total, page.page_number,
-                type(exc).__name__, len(exc.errors()),
+                idx,
+                total,
+                page.page_number,
+                type(exc).__name__,
+                len(exc.errors()),
             )
             result = _record_text_layer_fallback(
-                idx=idx, total=total,
+                idx=idx,
+                total=total,
                 page_number=page.page_number,
                 page_started=prepared.page_started,
                 artifacts=artifacts,
                 completion_label="validation-fallback",
             )
             return ExtractionOutcome(
-                succeeded=False, fell_back=True,
+                succeeded=False,
+                fell_back=True,
                 page_result=result,
                 format_md="",
             )
@@ -176,19 +179,23 @@ def run_extraction_loop(
             if not config.fallback_to_text or not is_transient(exc):
                 raise
             log.warning(
-                "  [%d/%d] page %d: vision pipeline failed after retries (%s); "
-                "falling back to text layer",
-                idx, total, page.page_number, _safe_exc_summary(exc),
+                "  [%d/%d] page %d: vision pipeline failed after retries (%s); falling back to text layer",
+                idx,
+                total,
+                page.page_number,
+                _safe_exc_summary(exc),
             )
             result = _record_text_layer_fallback(
-                idx=idx, total=total,
+                idx=idx,
+                total=total,
                 page_number=page.page_number,
                 page_started=prepared.page_started,
                 artifacts=artifacts,
                 completion_label="fallback",
             )
             return ExtractionOutcome(
-                succeeded=False, fell_back=True,
+                succeeded=False,
+                fell_back=True,
                 page_result=result,
                 format_md="",
             )
@@ -196,7 +203,9 @@ def run_extraction_loop(
         format_md = _output(extract_t)
 
         should_continue, penalty_prompt = _maybe_reflect(
-            page=page, idx=idx, total=total,
+            page=page,
+            idx=idx,
+            total=total,
             format_md=format_md,
             coverage_text_hint=coverage_text_hint,
             reflection_attempts=reflection_attempts,
@@ -206,7 +215,8 @@ def run_extraction_loop(
         reflection_attempts += 1
 
     return ExtractionOutcome(
-        succeeded=True, fell_back=False,
+        succeeded=True,
+        fell_back=False,
         page_result=None,
         format_md=format_md,
     )

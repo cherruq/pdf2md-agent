@@ -10,14 +10,13 @@ header. This module:
 * :func:`_strip_redundant_table_header` — drops the redundant
   header + separator from ``curr`` so it appends cleanly.
 """
+
 from __future__ import annotations
 
 import re
 
 
-_TABLE_SEPARATOR = re.compile(
-    r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$"
-)
+_TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
 """A markdown table separator row (e.g. ``|---|---|``)."""
 
 

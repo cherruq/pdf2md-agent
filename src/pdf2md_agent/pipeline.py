@@ -1,4 +1,5 @@
 """Pipeline orchestration and configuration for pdf2md-agent conversion."""
+
 from __future__ import annotations
 
 import logging
@@ -74,8 +75,7 @@ def run_unified_conversion(config: ConversionConfig) -> int:
         config.retry_config.jitter * 100,
     )
     log.info(
-        "  budget:          ctx_limit=%d, safety=%.0f%%, image_long_side=%dpx, "
-        "image_q=%d",
+        "  budget:          ctx_limit=%d, safety=%.0f%%, image_long_side=%dpx, image_q=%d",
         config.ctx_limit,
         TOKEN_BUDGET_SAFETY * 100,
         config.image_long_side,

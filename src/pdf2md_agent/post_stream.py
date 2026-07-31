@@ -30,6 +30,7 @@ a token until it sees the next one to decide whether to emit it.
 remaining buffer at end of document. The top-level helper
 :func:`stitch_pages` wraps the class for the common case.
 """
+
 from __future__ import annotations
 
 import re
@@ -122,9 +123,7 @@ def _strip_repeating_header_footer(text: str, compare_text: str) -> str:
         ):
             lines[first_idx] = ""
 
-    last_idx = next(
-        (k for k in range(len(lines) - 1, -1, -1) if lines[k].strip()), None
-    )
+    last_idx = next((k for k in range(len(lines) - 1, -1, -1) if lines[k].strip()), None)
     if last_idx is not None and last_idx != first_idx and len(lines) > 1:
         last_line = lines[last_idx].strip()
         if (
@@ -152,7 +151,6 @@ def _strip_standalone_page_numbers(text: str) -> str:
     while lines and no_pat.match(lines[-1]):
         lines.pop(-1)
     return "\n".join(lines).strip()
-
 
 
 def _clean_page_markdown(pages: list[PageResult]) -> list[str]:

@@ -1,4 +1,5 @@
 """LLM factory: CrewAI LLM preconfigured for MiniMax-M3 vision calls."""
+
 from __future__ import annotations
 
 from crewai import LLM

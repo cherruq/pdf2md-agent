@@ -20,6 +20,7 @@ The LANCZOS + JPEG re-encode here mirrors what
 memory, so the on-disk resized cache file looks identical to what the
 patch would produce inline.
 """
+
 from __future__ import annotations
 
 import logging
@@ -62,9 +63,7 @@ class PreparedPage:
     used by the caller to log per-page elapsed time."""
 
 
-def _resize_page_png(
-    src: Path, dst: Path, *, target_long_side: int, jpeg_quality: int
-) -> None:
+def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_quality: int) -> None:
     """Render ``src`` to ``dst`` as a downscaled JPEG.
 
     Uses the same LANCZOS resampler as
@@ -86,9 +85,7 @@ def _resized_cache_path(layout: CacheLayout, page_number: int) -> Path:
     return layout.pages_dir / f"page_{page_number:04d}_resized.jpg"
 
 
-def _make_tiles(
-    page: RenderedPage, pages_dir: Path, *, jpeg_quality: int
-) -> tuple[Path, Path]:
+def _make_tiles(page: RenderedPage, pages_dir: Path, *, jpeg_quality: int) -> tuple[Path, Path]:
     """Split ``page.image_path`` into two vertically-stacked JPEG tiles.
 
     The tiles overlap by 10% of the page height so any text near the
@@ -114,12 +111,8 @@ def _make_tiles(
         top_box = (0, 0, width, mid + overlap)
         bottom_box = (0, mid - overlap, width, height)
 
-        img.crop(top_box).convert("RGB").save(
-            tile1_path, "JPEG", quality=jpeg_quality
-        )
-        img.crop(bottom_box).convert("RGB").save(
-            tile2_path, "JPEG", quality=jpeg_quality
-        )
+        img.crop(top_box).convert("RGB").save(tile1_path, "JPEG", quality=jpeg_quality)
+        img.crop(bottom_box).convert("RGB").save(tile2_path, "JPEG", quality=jpeg_quality)
 
     return tile1_path, tile2_path
 
@@ -146,9 +139,7 @@ def prepare_page_image(
     ctx_limit = config.ctx_limit if config.ctx_limit > 0 else resolve_ctx_limit()
 
     persona_tokens = estimate_text_tokens(EXTRACTOR_BACKSTORY)
-    description_for_budget = build_extract_description(
-        page.image_path, text_hint_str
-    )
+    description_for_budget = build_extract_description(page.image_path, text_hint_str)
     fixed_text_tokens = estimate_text_tokens(description_for_budget)
     decision = plan_for_image(
         ctx_limit=ctx_limit,
@@ -162,8 +153,7 @@ def prepare_page_image(
     )
     current_img_tokens = estimate_image_tokens(page.image_path)
     log.info(
-        "  [%d/%d] page %d: tokens est. total=%d (text=%d, img=%d), "
-        "target_long_side=%d, reason=%s",
+        "  [%d/%d] page %d: tokens est. total=%d (text=%d, img=%d), target_long_side=%d, reason=%s",
         idx,
         total,
         page.page_number,
@@ -180,16 +170,21 @@ def prepare_page_image(
         # Even the smallest allowed downscale won't fit — split into
         # two tiles so the model sees the page in two passes.
         log.warning(
-            "  [%d/%d] page %d: Extreme downscaling needed, "
-            "splitting into tiles.",
-            idx, total, page.page_number,
+            "  [%d/%d] page %d: Extreme downscaling needed, splitting into tiles.",
+            idx,
+            total,
+            page.page_number,
         )
         tile1_path, tile2_path = _make_tiles(
-            page, pages_dir, jpeg_quality=image_jpeg_quality,
+            page,
+            pages_dir,
+            jpeg_quality=image_jpeg_quality,
         )
         log.info(
             "  [%d/%d] page %d: extract + format starting",
-            idx, total, page.page_number,
+            idx,
+            total,
+            page.page_number,
         )
         return PreparedPage(
             attach_image_path=page.image_path,
@@ -211,7 +206,9 @@ def prepare_page_image(
             )
         log.info(
             "  [%d/%d] page %d: extract + format starting",
-            idx, total, page.page_number,
+            idx,
+            total,
+            page.page_number,
         )
         return PreparedPage(
             attach_image_path=resized_path,
@@ -222,7 +219,9 @@ def prepare_page_image(
 
     log.info(
         "  [%d/%d] page %d: extract + format starting",
-        idx, total, page.page_number,
+        idx,
+        total,
+        page.page_number,
     )
     return PreparedPage(
         attach_image_path=page.image_path,

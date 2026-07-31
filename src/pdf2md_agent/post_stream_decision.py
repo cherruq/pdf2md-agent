@@ -14,6 +14,7 @@ Table-row continuation lives in
 :mod:`pdf2md_agent.post_stream_table` because it is a different
 heuristic (close + dedup) than the prose smart-join.
 """
+
 from __future__ import annotations
 
 import re

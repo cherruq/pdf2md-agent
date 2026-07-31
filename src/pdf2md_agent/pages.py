@@ -10,6 +10,7 @@ Two pure functions, no I/O:
   against the PDF's actual page count; raises :class:`ValueError` with a
   user-facing message on out-of-range pages.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -67,10 +68,7 @@ def parse_page_spec(spec: str) -> list[int]:
             if start > end:
                 raise _err(f"range start must be <= end, got {item!r}")
             if end - start + 1 > _MAX_RANGE_SPAN:
-                raise _err(
-                    f"range {item!r} exceeds {_MAX_RANGE_SPAN} pages "
-                    "(spec too wide; split into smaller ranges)"
-                )
+                raise _err(f"range {item!r} exceeds {_MAX_RANGE_SPAN} pages (spec too wide; split into smaller ranges)")
             for p in range(start, end + 1):
                 if p not in seen:
                     seen.add(p)

@@ -1,4 +1,5 @@
 """Tests for pdf2md_agent.crew.runner's retry + fallback wiring."""
+
 from __future__ import annotations
 
 import logging
@@ -89,8 +90,8 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
 
     extract_t = _FakeTask()
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t):
+    with patch.object(runner, "make_extractor"), patch.object(runner, "make_extract_task", return_value=extract_t):
+
         def _always_timeout() -> None:
             raise APITimeoutError(request=httpx.Request("GET", "https://example.test"))
 
@@ -123,8 +124,7 @@ def test_run_pipeline_does_not_fall_back_for_permanent_errors(
 
     extract_t = _FakeTask()
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t):
+    with patch.object(runner, "make_extractor"), patch.object(runner, "make_extract_task", return_value=extract_t):
         with patch.object(runner, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = lambda: (_ for _ in ()).throw(
                 BadRequestError(message="bad", response=_response(400), body=None)
@@ -148,8 +148,7 @@ def test_run_pipeline_propagates_when_fallback_disabled(
 
     extract_t = _FakeTask()
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t):
+    with patch.object(runner, "make_extractor"), patch.object(runner, "make_extract_task", return_value=extract_t):
         with patch.object(runner, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = lambda: (_ for _ in ()).throw(
                 APITimeoutError(request=httpx.Request("GET", "https://example.test"))
@@ -190,8 +189,7 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
 
     extract_t = _FakeTask()
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t):
+    with patch.object(runner, "make_extractor"), patch.object(runner, "make_extract_task", return_value=extract_t):
         with patch.object(runner, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _raise_task_output_validation_error
             caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
@@ -210,8 +208,7 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
     assert "recovered text layer content" in md
     assert layout.page_format_path(1).exists()
     assert any(
-        "validation-fallback" in rec.message or "falling back to text layer" in rec.message
-        for rec in caplog.records
+        "validation-fallback" in rec.message or "falling back to text layer" in rec.message for rec in caplog.records
     )
 
 
@@ -223,8 +220,7 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
 
     extract_t = _FakeTask()
 
-    with patch.object(runner, "make_extractor"), \
-         patch.object(runner, "make_extract_task", return_value=extract_t):
+    with patch.object(runner, "make_extractor"), patch.object(runner, "make_extract_task", return_value=extract_t):
         with patch.object(runner, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _raise_task_output_validation_error
             with pytest.raises(ValidationError):

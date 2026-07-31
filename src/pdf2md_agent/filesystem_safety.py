@@ -12,6 +12,7 @@ cache. Two concerns live here:
   separators, so two distinct absolute paths always land in distinct
   cache directories.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -19,9 +20,7 @@ import sys
 from pathlib import Path
 
 _WINDOWS_RESERVED_NAMES: frozenset[str] = frozenset(
-    {"CON", "PRN", "AUX", "NUL"}
-    | {f"COM{i}" for i in range(1, 10)}
-    | {f"LPT{i}" for i in range(1, 10)}
+    {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
 )
 """Windows reserved device names: ``CON``/``PRN``/``AUX``/``NUL`` plus
 ``COM1``-``COM9`` and ``LPT1``-``LPT9``. Case-insensitive on Windows.
