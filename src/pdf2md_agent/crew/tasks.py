@@ -1,4 +1,4 @@
-"""Per-page task factories: extract → format."""
+"""按页任务工厂：提取 → 格式化。"""
 
 from __future__ import annotations
 
@@ -8,9 +8,8 @@ from crewai import Agent, Task
 
 from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
 
-# Idempotent: ensures AddImageTool converts local paths to data: URLs and
-# re-encodes them as JPEG (long-side capped) before sending them to
-# OpenAI-compatible vision APIs (which reject bare paths and oversized images).
+# 幂等操作：确保 AddImageTool 将本地路径转换为 data: URL 并且
+# 在发送给兼容 OpenAI 的视觉 API（这些 API 拒绝裸路径和超大图像）之前，将其重新编码为 JPEG（长边受限）。
 patch_add_image_tool()
 
 _NO_REASONING = (
@@ -62,7 +61,7 @@ def extract_task_intro(
 
 
 def _text_hint_block(text: str) -> str:
-    """Build the text-hint block appended to the extract task, or empty string."""
+    """构建附加到提取任务的文本提示块，如果没有则为空字符串。"""
     text = text.strip()
     if not text:
         return ""
@@ -85,7 +84,7 @@ def build_extract_description(
     is_tiled: bool = False,
     tile_paths: list[Path] | None = None,
 ) -> str:
-    """Build the exact description string the extract task sends to the LLM."""
+    """构建提取任务发送给 LLM 的确切描述字符串。"""
     return (
         f"{_text_hint_block(text_hint)}"
         f"{extract_task_intro(page_path, is_tiled, tile_paths)}"
@@ -103,7 +102,7 @@ def make_extract_task(
     is_tiled: bool = False,
     tile_paths: list[Path] | None = None,
 ) -> Task:
-    """Create the page-extraction task with image + text hint."""
+    """创建带有图像 + 文本提示的页面提取任务。"""
     description = build_extract_description(
         page_path,
         text_hint,

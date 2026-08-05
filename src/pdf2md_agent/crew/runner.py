@@ -1,4 +1,4 @@
-"""Per-page CrewAI pipeline orchestrator."""
+"""逐页 CrewAI 流水线编排器。"""
 
 from __future__ import annotations
 
@@ -45,8 +45,8 @@ def _process_single_page(
     config: ConversionConfig,
     llm: LLM,
 ) -> tuple[PageResult, bool]:
-    """Process a single PDF page through short-circuits or the full extraction loop."""
-    # Lazy import to keep the runner ↔ extraction import order acyclic.
+    """通过短路或完整的提取循环处理单个 PDF 页面。"""
+    # 延迟导入以保持 runner ↔ extraction 的导入顺序无环。
     from pdf2md_agent.crew.extraction import run_extraction_loop
 
     from dataclasses import replace
@@ -55,7 +55,7 @@ def _process_single_page(
 
     artifacts = config.layout.artifacts_for(ctx.page_number)
 
-    # Short-circuit: format.md cached → trust.
+    # 短路：format.md 已缓存 → 信任。
     if not config.no_cache.format and is_page_complete(config.layout, ctx.page_number):
         cached_md = artifacts.format_markdown.read_text(encoding="utf-8").strip()
         log.info(
@@ -66,7 +66,7 @@ def _process_single_page(
         )
         return PageResult(ctx.page_number, cached_md), False
 
-    # Full pipeline path.
+    # 完整的流水线路径。
     text_hint_str = ""
     if config.text_hint:
         text_hint_str = page.text if getattr(page, "text", "") else read_page_text(artifacts.page_text)
@@ -105,7 +105,7 @@ def run_pipeline(
     config: ConversionConfig,
     llm: LLM,
 ) -> list[PageResult]:
-    """Run the per-page CrewAI pipeline across ``pages`` and return page results."""
+    """在 ``pages`` 上运行逐页的 CrewAI 流水线并返回页面结果。"""
     patch_add_image_tool(
         target_long_side=config.image_long_side,
         jpeg_quality=config.image_jpeg_quality,
@@ -150,7 +150,7 @@ def run_pipeline(
     return results
 
 
-# Step 2 entry point alias for the unified conversion pipeline
+# 用于统一转换流水线的第 2 步入口点别名
 step2_extract_pages = run_pipeline
 
 __all__ = [

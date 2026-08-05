@@ -1,17 +1,11 @@
-"""Token-count estimator for prompt text and inlined page images.
+"""提示文本和内嵌页面图像的 token 计数估算器。
 
-Two pure functions, no I/O beyond ``Path.stat``:
+两个纯函数，除了 ``Path.stat`` 之外没有其他 I/O：
 
-* :func:`estimate_text_tokens` — coarse heuristic over CJK / non-CJK runs
-  used to budget persona + per-page prompt cost before the LLM call.
-* :func:`estimate_image_tokens` — converts a file size or byte buffer to
-  its estimated base64 token cost. Pixels are *never* decoded; the
-  estimator only reads ``Path.stat().st_size``.
+* :func:`estimate_text_tokens` — 针对 CJK / 非 CJK 字符序列的粗略启发式算法，用于在调用 LLM 之前估算系统提示词 + 每页提示词的开销预算。
+* :func:`estimate_image_tokens` — 将文件大小或字节缓冲区转换为其估计的 base64 token 开销。*永远不会*解码像素；估算器只读取 ``Path.stat().st_size``。
 
-All estimators are deliberately conservative — they never call any
-external tokenizer (``tiktoken`` is forbidden by the project
-guidelines) and they over-estimate so a budget-passing call is
-guaranteed to fit in practice.
+所有的估算器都有意采取保守策略 —— 它们从不调用任何外部的分词器（根据项目规范，禁止使用 ``tiktoken``），并且它们会高估以确保通过预算的调用在实践中一定能装得下。
 """
 
 from __future__ import annotations
@@ -23,34 +17,31 @@ from typing import Final, Union
 
 log = logging.getLogger("pdf2md_agent.token_estimator")
 
-# 3.5 is empirically a safe upper bound observed in 400-response logs;
-# the base64↔token mapping is opaque across providers, so over-estimate.
+# 根据 400 响应日志中的观察结果，3.5 是经验上安全的上限；
+# 跨供应商的 base64 ↔ token 映射是不透明的，因此要高估。
 _IMAGE_BYTES_PER_TOKEN: Final[float] = 3.5
 
-# Number of CJK / wide characters per token. Mixed CJK + Latin prose
-# averages to roughly one token per ~1.5 chars; we use the conservative
-# 1/3 ratio so pages heavy in Chinese text do not under-budget.
+# 每个 token 对应的 CJK / 宽字符数。混合的 CJK + 拉丁文散文
+# 平均约 1.5 个字符一个 token；我们使用保守的 1/3 比例，以避免包含大量中文文本的页面预算不足。
 _CJK_CHARS_PER_TOKEN: Final[float] = 3.0
 
-# Latin ratio is closer to 1 token per 4 chars; pairs of quotes/punctuation
-# inflate this a bit but the heuristic is intentionally coarse.
+# 拉丁文比例更接近 4 个字符 1 个 token；成对的引号/标点符号
+# 会略微增加这个值，但该启发式算法是有意设计的粗略估算。
 _ASCII_CHARS_PER_TOKEN: Final[float] = 4.0
 
 PathOrBytes = Union[str, Path, bytes, bytearray]
 
 
 def estimate_text_tokens(s: str) -> int:
-    """Estimate token cost of a text prompt using a mixed CJK/ASCII heuristic.
+    """使用混合的 CJK/ASCII 启发式算法估算文本提示词的 token 开销。
 
-    Splits the input into CJK-runs (treated at 1 token per 3 chars) and ASCII
-    runs (1 token per 4 chars), then sums both halves. The estimate is
-    deliberately coarse — its purpose is budget *planning*, not exact billing.
+    将输入拆分为 CJK 序列（按 3 个字符 1 个 token 处理）和 ASCII 序列（按 4 个字符 1 个 token 处理），然后将两部分求和。该估算是有意设计的粗略估算 —— 它的目的是进行预算*规划*，而不是精确计费。
 
     Args:
-        s: The prompt text whose token cost we want to budget for.
+        s: 我们想要为其进行 token 开销预算的提示文本。
 
     Returns:
-        Estimated number of tokens as an ``int`` (always >= 0).
+        估计的 token 数量，作为 ``int`` (始终 >= 0)。
     """
     if not s:
         return 0
@@ -76,23 +67,19 @@ def estimate_text_tokens(s: str) -> int:
 
 
 def estimate_image_tokens(path_or_bytes: PathOrBytes, *, mime: str = "image/jpeg") -> int:
-    """Estimate token cost of inlining an image as a base64 data URL.
+    """估算将图像内联为 base64 数据 URL 的 token 开销。
 
-    Only ``Path.stat().st_size`` is consulted — pixels are *not* decoded. The
-    estimator pretends every byte ends up in a base64 string of length
-    ``ceil(N/3) * 4`` and that each token covers ~3.5 base64 chars. This
-    over-estimates compared to the model's actual rate but matches the
-    behaviour reported by ``400 context window exceeds limit`` errors.
+    仅查阅 ``Path.stat().st_size`` —— *不*解码像素。估算器假定每个字节最终都会变成长度为
+    ``ceil(N/3) * 4`` 的 base64 字符串，并且每个 token 涵盖约 3.5 个 base64 字符。这
+    与模型实际的速率相比高估了开销，但符合 ``400 context window exceeds limit`` 错误所报告的行为。
 
     Args:
-        path_or_bytes: A local file ``Path``/``str`` or the raw ``bytes`` of
-            an image. ``http(s)://`` URLs are not supported here — the
-            caller should have downloaded them already.
-        mime: Unused for the bytes-only estimator; accepted for API
-            symmetry with future Pillow-aware estimators.
+        path_or_bytes: 图像的本地文件 ``Path``/``str`` 或原始 ``bytes``。
+            此处不支持 ``http(s)://`` URL —— 调用者应已事先下载它们。
+        mime: 仅字节估算器未使用；为了与未来感知 Pillow 的估算器在 API 上保持对称而接受。
 
     Returns:
-        Estimated number of tokens as an ``int``.
+        估计的 token 数量，作为 ``int``。
     """
     del mime
     if isinstance(path_or_bytes, (str, Path)):

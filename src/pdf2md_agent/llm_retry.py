@@ -1,23 +1,22 @@
-"""Retry helper for transient LLM-API failures.
+"""用于瞬时 LLM-API 故障的重试辅助工具。
 
-Vision-model calls go through the OpenAI SDK against a custom ``base_url``
-(MiniMax-M3). That endpoint, like any HTTP service, can return:
+视觉模型调用通过 OpenAI SDK 发送到自定义 ``base_url``
+(MiniMax-M3)。与任何 HTTP 服务一样，该端点可能会返回：
 
-* network-level failures (timeout, connection refused, DNS hiccup)
-* transient server errors (HTTP 5xx, gateway 502/503/504)
-* rate-limit responses (HTTP 429)
+* 网络级故障（超时、拒绝连接、DNS 异常）
+* 瞬时服务器错误（HTTP 5xx、网关 502/503/504）
+* 速率限制响应（HTTP 429）
 
-We retry those with Fibonacci backoff + jitter, capped at a per-attempt
-delay (15 minutes by default). With ``max_attempts=None`` transient failures
-are retried indefinitely; permanent failures (authentication, bad request,
-permission denied) are NOT retried — re-issuing the exact same request
-just burns the budget and re-fails identically.
+我们使用斐波那契退避算法（Fibonacci backoff）+ 抖动（jitter）来重试这些请求，单次延迟有上限
+（默认为 15 分钟）。如果 ``max_attempts=None``，则会无限期地重试瞬时故障；
+而永久性故障（认证失败、错误请求、无权限）不会被重试 —— 重新发送完全相同的请求
+只会白白消耗预算并得到同样的失败结果。
 
-The runner wraps each per-page ``crew.kickoff()`` in :func:`call_with_retry`
-and, on retry exhaustion, hands the page off to a fallback path that emits
-markdown from the PDF's native text layer (no vision model required).
+运行器（runner）将每页的 ``crew.kickoff()`` 包装在 :func:`call_with_retry` 中，
+并且在重试耗尽后，会将该页面转交给降级/回退路径，该路径从 PDF 的原生文本层
+生成 markdown（无需使用视觉模型）。
 
-Public API: :class:`RetryConfig`, :func:`is_transient`, :func:`call_with_retry`.
+公共 API：:class:`RetryConfig`, :func:`is_transient`, :func:`call_with_retry`.
 """
 
 from __future__ import annotations
@@ -39,8 +38,8 @@ from openai import (
 )
 
 
-# ``secrets.SystemRandom`` (not ``random``) so retry backoffs cannot sync
-# across parallel clients.
+# 使用 ``secrets.SystemRandom``（而不是 ``random``），这样重试退避不会在
+# 并行的客户端之间同步。
 _RNG = secrets.SystemRandom()
 
 T_co = TypeVar("T_co")
@@ -52,14 +51,12 @@ log = logging.getLogger("pdf2md_agent.llm_retry")
 
 
 def _safe_exc_summary(exc: BaseException) -> str:
-    """Return a redacted summary of ``exc`` safe to write to logs.
+    """返回可以安全写入日志的已删减的 ``exc`` 摘要。
 
-    For ``APIStatusError`` we emit only the exception class name, HTTP
-    status code, and ``str(exc)`` (which is the OpenAI SDK's own
-    redacted message — it deliberately excludes ``exc.body``). This
-    prevents provider response payloads (which can contain user
-    content, internal stack traces, or other sensitive data) from
-    landing in log files.
+    对于 ``APIStatusError``，我们仅输出异常类名、HTTP 状态码和
+    ``str(exc)``（这是 OpenAI SDK 自带的经过删减的信息 —— 它刻意排除了 ``exc.body``）。
+    这可以防止提供商响应的负载（可能包含用户内容、内部堆栈跟踪或其他敏感数据）
+    落入日志文件中。
     """
     if isinstance(exc, APIStatusError):
         return f"{type(exc).__name__}: status={exc.status_code}: {exc}"
@@ -72,15 +69,15 @@ _TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
     InternalServerError,
     RateLimitError,
 )
-"""Concrete transient exception types we always retry. ``APIStatusError``
-is handled separately (only when the status code is 5xx; 4xx is permanent)."""
+"""我们总是会重试的具体瞬时异常类型。``APIStatusError``
+会单独处理（仅当状态码为 5xx 时重试；4xx 是永久性的）。"""
 
 
 def is_transient(exc: BaseException) -> bool:
-    """Return True if ``exc`` represents a transient failure worth retrying.
+    """如果 ``exc`` 表示值得重试的瞬时故障，则返回 True。
 
-    Permanent client errors (400/401/403/404/422) return False — retrying
-    them produces an identical failure and wastes the budget.
+    永久性客户端错误（400/401/403/404/422）返回 False —— 重试
+    它们会产生相同的失败结果并浪费预算。
     """
     if isinstance(exc, _TRANSIENT_EXCEPTIONS):
         return True
@@ -94,16 +91,14 @@ def is_transient(exc: BaseException) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class RetryConfig:
-    """Bounded Fibonacci-backoff retry policy.
+    """有界斐波那契退避（Fibonacci-backoff）重试策略。
 
-    Defaults retry transient failures indefinitely (``max_attempts=None``)
-    with a Fibonacci growth schedule capped at ``max_delay`` (15 minutes by
-    default). The CLI's ``--max-retries`` flag accepts ``0`` as a synonym for
-    unlimited; pass an explicit integer to bound the budget.
+    默认无限期重试瞬时故障（``max_attempts=None``），并以斐波那契增长计划作为退避策略，
+    上限为 ``max_delay``（默认为 15 分钟）。CLI 的 ``--max-retries`` 标志接受 ``0`` 作为
+    无限次数的同义词；传入一个明确的整数来限制预算。
 
-    ``initial_delay`` must be strictly positive: a zero value disables
-    backoff entirely, and combined with ``max_attempts=None`` devolves into
-    a busy-spin on transient failures.
+    ``initial_delay`` 必须严格为正数：零值会完全禁用退避算法，并且如果结合
+    ``max_attempts=None``，会在发生瞬时故障时退化为忙等待循环（busy-spin）。
     """
 
     max_attempts: int | None = None
@@ -132,10 +127,10 @@ class RetryConfig:
 
 
 def _fibonacci_multipliers() -> Iterator[int]:
-    """Yield Fibonacci numbers 1, 1, 2, 3, 5, 8, ... ad infinitum.
+    """无限生成斐波那契数列 1, 1, 2, 3, 5, 8, ...
 
-    Used by :func:`call_with_retry` to scale each retry delay: each
-    sleep = ``initial_delay * next(fibonacci)``, then capped at ``max_delay``.
+    被 :func:`call_with_retry` 用于缩放每个重试延迟：每次
+    sleep = ``initial_delay * next(fibonacci)``，然后受 ``max_delay`` 的限制。
     """
     a, b = 1, 1
     while True:
@@ -144,10 +139,10 @@ def _fibonacci_multipliers() -> Iterator[int]:
 
 
 def _compute_fibonacci_wait(config: RetryConfig, multiplier: int) -> float:
-    """Cap-and-jitter one backoff delay.
+    """计算单个具有上限和抖动的退避延迟。
 
-    ``uncapped`` is the Fibonacci-scaled delay; ``jittered`` perturbs it
-    by ``±jitter``; the result is clamped to ``[0, max_delay]``.
+    ``uncapped`` 是按斐波那契缩放的延迟；``jittered`` 对其加上 ``±jitter`` 抖动扰动；
+    结果被限制在 ``[0, max_delay]`` 的范围内。
     """
     uncapped = config.initial_delay * multiplier
     jittered = uncapped * (1.0 + _RNG.uniform(-config.jitter, config.jitter))
@@ -158,11 +153,11 @@ def _compute_fibonacci_wait(config: RetryConfig, multiplier: int) -> float:
 
 
 class _TimeoutCause(Exception):
-    """Internal marker: distinguishes a timeout-guard hit from caller raises."""
+    """内部标记：用于区分触发超时保护还是调用者抛出异常。"""
 
 
 def _dummy_request() -> object:
-    """Placeholder httpx request used to satisfy ``APITimeoutError(request=…)``."""
+    """用于满足 ``APITimeoutError(request=…)`` 参数要求的占位符 httpx request。"""
     import httpx
 
     return httpx.Request("GET", "https://example.test/")
@@ -172,20 +167,17 @@ def _call_with_timeout(
     fn: Callable[[], T_co],
     timeout_seconds: float,
 ) -> T_co:
-    """Run ``fn()`` on a daemon thread; raise :class:`_TimeoutCause` on overrun.
+    """在守护线程中运行 ``fn()``；若超时，抛出 :class:`_TimeoutCause` 异常。
 
-    A previous implementation wrapped a one-shot
-    :class:`concurrent.futures.ThreadPoolExecutor` in a ``with`` block. The
-    block's ``__exit__`` calls ``executor.shutdown(wait=True)`` which
-    blocks the caller until the worker thread completes — so when ``fn``
-    hangs the timeout-guard raised its marker exception only **after** the
-    hung call had already finished, defeating the whole point of the
-    wall-clock guard. We now spawn a ``daemon=True`` thread per call and
-    ``join(timeout=...)`` on it. The caller returns as soon as the timeout
-    fires; the abandoned worker keeps running but is killed on process
-    exit (daemon=True). The SDK's own ``timeout`` argument forwarded to
-    the LLM call eventually unblocks the inner I/O, so the orphan
-    thread is short-lived in practice.
+    早期的实现是将一次性的 :class:`concurrent.futures.ThreadPoolExecutor` 包装
+    在 ``with`` 块中。该块的 ``__exit__`` 会调用 ``executor.shutdown(wait=True)``，这会
+    阻塞调用者直到工作线程完成 —— 因此，当 ``fn`` 发生挂起时，超时保护机制
+    只有在挂起的调用已经完成 **之后** 才会抛出其标记异常，完全失去了强制
+    挂钟（wall-clock）超时的初衷。现在我们每次调用都会生成一个 ``daemon=True`` 线程，
+    并对其调用 ``join(timeout=...)``。只要超时触发，调用者就会立即返回；被遗弃的
+    工作线程会继续运行，但会在进程退出时被杀掉（daemon=True）。传递给 LLM 调用的 SDK
+    自带的 ``timeout`` 参数最终会解除内部 I/O 的阻塞状态，所以在实际情况中，
+    孤儿线程往往是短暂存在的。
     """
     holder: list[object] = [None, None, False]
 
@@ -218,25 +210,20 @@ def call_with_retry(
     sleep: Callable[[float], None] = time.sleep,
     timeout_seconds: float | None = None,
 ) -> T_co:
-    """Call ``fn`` with Fibonacci-backoff retry on transient failures.
+    """在遇到瞬时故障时，调用 ``fn`` 并使用斐波那契退避重试。
 
-    The caller passes a zero-arg callable so each attempt is a fresh call
-    (no shared mutable state across attempts). Non-transient exceptions
-    propagate immediately without sleeping.
+    调用者需传入无参的可调用对象，这样每次尝试都是一次全新的调用
+    （每次尝试之间不共享可变状态）。非瞬时异常会立即抛出而不会等待。
 
-    ``sleep`` is injectable for tests so we can assert retry counts without
-    actually waiting.
+    ``sleep`` 支持为了测试而注入，以便我们无需实际等待即可断言重试次数。
 
-    ``timeout_seconds`` is a wall-clock guard for each attempt: when the
-    call exceeds the budget, an :class:`APITimeoutError` is raised. The
-    guard is layered on top of the SDK's own ``timeout`` so hangs inside
-    crewAI's internal pipelines are also bounded.
+    ``timeout_seconds`` 是针对每次尝试的挂钟（wall-clock）保护：当调用
+    超过设定时间时，抛出 :class:`APITimeoutError` 异常。该保护机制叠加
+    在 SDK 自身的 ``timeout`` 之上，因此 crewAI 内部管道的挂起也会受到限制。
 
-    Per-retry sleeps grow by the Fibonacci sequence
-    (1, 1, 2, 3, 5, 8, 13, ...) scaled by ``initial_delay`` and capped at
-    ``max_delay``. With ``max_attempts=None`` (the default) transient
-    failures are retried indefinitely; non-transient failures always
-    propagate immediately, regardless of the cap.
+    每次重试的睡眠时间按斐波那契数列（1, 1, 2, 3, 5, 8, 13, ...）以
+    ``initial_delay`` 进行缩放，最大不超过 ``max_delay``。在设置 ``max_attempts=None``
+    （默认值）时，瞬时故障将被无限重试；而非瞬时故障，无论上限设为多少，都会立刻抛出异常。
     """
     bound = str(config.max_attempts) if config.max_attempts is not None else "\u221e"
     last_exc: Exception | None = None
@@ -295,7 +282,7 @@ def _sleep_and_continue(
     fib_multipliers: Iterator[int],
     sleep: Callable[[float], None],
 ) -> None:
-    """Log a transient retry, sleep, and continue the loop."""
+    """记录瞬时重试的日志，进行休眠并继续循环。"""
     wait = _compute_fibonacci_wait(config, next(fib_multipliers))
     log.info(
         "%s: retrying after transient %s on attempt %d/%s (%s); sleeping %.2fs",

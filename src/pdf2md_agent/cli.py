@@ -1,4 +1,4 @@
-"""CLI entry point for pdf2md-agent."""
+"""pdf2md-agent 的命令行(CLI)入口。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ from pdf2md_agent.vision import make_vision_llm as make_vision_llm  # noqa: F401
 log = logging.getLogger("pdf2md-agent")
 
 
-# --- Entrypoint -------------------------------------------------------------
+# --- 入口 -------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,11 +62,11 @@ def main(argv: list[str] | None = None) -> int:
     return cmd_convert(args)
 
 
-# --- Input validation -------------------------------------------------------
+# --- 输入验证 -------------------------------------------------------
 
 
 def _validate_pdf_header(pdf: Path) -> int | None:
-    """Return exit code if the file is missing, unreadable, or not a PDF; else None."""
+    """如果文件缺失、不可读或不是 PDF，则返回退出码；否则返回 None。"""
     if not pdf.exists():
         print(f"error: input PDF not found: {pdf}", file=sys.stderr)
         return 1
@@ -89,7 +89,7 @@ def _validate_pdf_header(pdf: Path) -> int | None:
 
 
 def _resolve_requested_pages(pdf: Path, pages_spec: object) -> tuple[list[int] | None, int | None]:
-    """Validate ``pages_spec`` against the PDF's page count."""
+    """根据 PDF 的页面数量验证 ``pages_spec``。"""
     if pages_spec is None:
         return None, None
     doc = pymupdf.open(pdf)
@@ -106,7 +106,7 @@ def _resolve_requested_pages(pdf: Path, pages_spec: object) -> tuple[list[int] |
     return resolved, None
 
 
-# --- Orchestration Gateway --------------------------------------------------
+# --- 编排网关 --------------------------------------------------
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
@@ -148,7 +148,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
 
 
-# Step 1, 2, 3 aliases for clear 3-step architecture
+# 步骤 1, 2, 3 的别名，用于清晰表示三步架构
 step1_render_and_sync_cache = _render_pages
 step2_extract_pages = run_pipeline
 step3_stitch_and_clean = stitch_pages

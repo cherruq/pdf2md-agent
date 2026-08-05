@@ -1,14 +1,14 @@
-"""Text-layer fallback helpers for the per-page pipeline.
+"""用于逐页流水线的文本层降级辅助函数。
 
-When the vision model is unreachable after every retry, or when its output
-fails CrewAI's task-output validation, the runner emits a fenced
-text-layer Markdown stub instead of crashing the whole run. This module
-isolates:
+当视觉模型在所有重试后都无法访问时，或者当其输出
+未能通过 CrewAI 的任务输出验证时，runner 会发出一个带栅栏的
+文本层 Markdown 存根，而不是使整个运行崩溃。此模块
+隔离了：
 
-* :func:`_text_layer_fallback` — build the stub markdown from the PDF's
-  native text layer for a single page.
-* :func:`_record_text_layer_fallback` — write the stub into
-  the page's format artifacts and return a :class:`PageResult`.
+* :func:`_text_layer_fallback` — 从 PDF 的
+  原生文本层构建单个页面的存根 Markdown。
+* :func:`_record_text_layer_fallback` — 将存根写入
+  页面的格式化工件中，并返回一个 :class:`PageResult`。
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 
 def _text_layer_fallback(artifacts: PageArtifacts) -> str:
-    """Build a best-effort markdown page from the PDF's native text layer.
+    """从 PDF 的原生文本层尽力构建一个 Markdown 页面。
 
-    Used when the vision model is unreachable after all retries. The page's
-    PNG is dropped from the output (we can't describe it) and the text is
-    emitted verbatim in a fenced block so reviewers can spot drift.
+    在所有重试后视觉模型仍无法访问时使用。页面的
+    PNG 会从输出中被丢弃（我们无法描述它），并且文本会
+    被原封不动地输出在一个带栅栏的代码块中，以便审阅者可以发现偏差。
     """
     text = read_page_text(artifacts.page_text).strip()
     if not text:
@@ -49,9 +49,9 @@ def _record_text_layer_fallback(
     artifacts: PageArtifacts,
     completion_label: str,
 ) -> str:
-    """Write the fallback artifacts for one page and return the fallback markdown.
+    """为一个页面写入降级工件并返回降级 Markdown。
 
-    Writes the fallback markdown to ``format.md``.
+    将降级 Markdown 写入 ``format.md``。
     """
     record = FallbackRecord(
         artifacts=artifacts,

@@ -1,34 +1,29 @@
-"""Cross-page stitching post-processor.
+"""跨页拼接后处理器。
 
-The per-page extractor sees only one page at a time, so a sentence,
-list item, or table row that gets split across a page boundary is
-emitted as two fragments separated by an explicit ``\\n\\n---\\n\\n``
-delimiter. That hard delimiter makes the split visible in the output
-and is almost always wrong: the original document was one continuous
-block.
+每页的提取器一次只能看到一页，所以横跨页面边界的句子、
+列表项或者表格行会被拆分成以显式的 ``\\n\\n---\\n\\n`` 
+作为分隔符的两个片段。这种生硬的分隔符使得断层在输出中显露无疑，
+而且这几乎总是错的：原本的文档是一段连续的块。
 
-``StreamingStitcher`` runs **after** the per-page pipeline and
-re-stitches these fragments into a single continuous Markdown document.
-It is a pure post-processor with no LLM dependency — the decision of
-whether two fragments belong together is made by a small set of cheap
-text heuristics (see :mod:`pdf2md_agent.post_stream_decision`):
+``StreamingStitcher`` 会在逐页面处理流水线 **之后** 运行并且
+将这些片段重新拼接为一段连续的 Markdown 文档。
+它是一个不依赖于 LLM 且十分纯粹的后置处理器 —— 两段片段
+是否应当被拼接的决策取决于一组小巧而经济的文本启发式算法
+（参见 :mod:`pdf2md_agent.post_stream_decision`）：
 
-* If the previous fragment ends without a sentence-terminating
-  punctuation and the next fragment does not start a new block
-  (heading, list, blockquote, table, code fence), they are joined.
-* If the previous fragment ends with an unclosed markdown table row
-  (odd number of ``|``, no trailing ``|``), the row is closed and the
-  next fragment is appended; if the next fragment repeats the table
-  header, that header is dropped.
-* CJK characters are joined without an intervening space; Latin
-  fragments get a single space.
+* 如果上一个片段的末尾不含有标点终结符并且下一个片段不是以新的一块
+  （比如标题、列表、引用段落、表格、代码块）开头，它们便会被拼接在一起。
+* 如果上一个片段由于未闭合的 markdown 表格行结束
+  （存在奇数个 ``|``，且没有尾随 ``|``），该行会被强制闭合，
+  然后追加接下来的片段；如果紧接着的片段重复生成了表头，那么这个表头会被丢弃。
+* CJK（中日韩）字符拼接时中间不留空格；对于拉丁字母片段拼接时会在中间留单个空格。
 
-The class is called "Streaming" because it buffers only the last
-fragment of each page — the same idea as a streaming parser holding back
-a token until it sees the next one to decide whether to emit it.
-``feed()`` yields confirmed fragments and ``finalize()`` flushes any
-remaining buffer at end of document. The top-level helper
-:func:`stitch_pages` wraps the class for the common case.
+这个类被称之为 "流式（Streaming）" 是因为它只会对每页的最后一段
+片段进行缓冲 —— 其理念和流式解析器扣留一个 token 直到其看见接下来的信息
+从而决定是否发出它是如出一辙的。
+``feed()`` 会生成（yield）被确认为定稿的片段，而 ``finalize()`` 会在文档末尾处刷新所有
+余留在缓冲区中的内容。最顶层的辅助函数
+:func:`stitch_pages` 是对普通用例类的一层包装。
 """
 
 from __future__ import annotations
@@ -53,13 +48,13 @@ from pdf2md_agent.post_stream_table import _join_table_continuation
 
 
 class StitchMode(str, Enum):
-    """How aggressively to stitch per-page fragments together."""
+    """有多激进的将每页之间的片段进行拼接。"""
 
     OFF = "off"
-    """Pre-stitcher behavior: hard ``\\n\\n---\\n\\n`` between every page."""
+    """拼接器前的行为：在每一页之间加上生硬的 ``\\n\\n---\\n\\n``。"""
 
     HEURISTIC = "heuristic"
-    """Default. Pure-text heuristic, no extra LLM calls, no extra latency."""
+    """默认选项。基于纯文本启发式算法，无需额外的 LLM 调用，无额外延迟。"""
 
 
 def stitch_pages(
@@ -67,24 +62,23 @@ def stitch_pages(
     *,
     mode: StitchMode = StitchMode.HEURISTIC,
 ) -> str:
-    """Concatenate per-page Markdown with optional cross-page stitching.
+    """连接各页的 Markdown 并进行可选的跨页拼接。
 
-    Parameters
+    参数
     ----------
     pages
-        Per-page output from :func:`pdf2md_agent.crew.runner.run_pipeline`.
-        Any iterable; only iterated once.
+        每页的输出内容，来自 :func:`pdf2md_agent.crew.runner.run_pipeline`。
+        任何可迭代对象；只遍历一次。
     mode
-        See :class:`StitchMode`. ``HEURISTIC`` is the default and is
-        sufficient for the vast majority of prose, list, and simple
-        table splits.
+        参见 :class:`StitchMode`。``HEURISTIC`` 为默认值，并且
+        对于绝大多数散文、列表，以及简单的表格分割已经足够。
 
-    Returns
+    返回
     -------
     str
-        The full document as one Markdown string. In ``HEURISTIC`` mode
-        there is no ``---`` separator between pages; in ``OFF`` mode the
-        legacy ``\\n\\n---\\n\\n`` separator is preserved verbatim.
+        作为单个 Markdown 字符串的完整文档。在 ``HEURISTIC`` 模式下，
+        页面之间没有 ``---`` 分隔符；在 ``OFF`` 模式下，
+        旧版的 ``\\n\\n---\\n\\n`` 分隔符会被逐字保留。
     """
     _LEGACY_SEPARATOR = "\n\n---\n\n"
 
@@ -103,7 +97,7 @@ def stitch_pages(
 
 
 def _strip_repeating_header_footer(text: str, compare_text: str) -> str:
-    """Strip repeating running header or footer lines across adjacent pages."""
+    """剥离在相邻页面之间重复出现的页眉或页脚行。"""
     if not text or not compare_text:
         return text
 
@@ -138,7 +132,7 @@ def _strip_repeating_header_footer(text: str, compare_text: str) -> str:
 
 
 def _strip_standalone_page_numbers(text: str) -> str:
-    """Strip leading and trailing standalone page number lines."""
+    """剥离位于起始与末尾且单独占一行的页码行。"""
     if not text:
         return text
     lines = text.splitlines()
@@ -154,7 +148,7 @@ def _strip_standalone_page_numbers(text: str) -> str:
 
 
 def _clean_page_markdown(pages: list[PageResult]) -> list[str]:
-    """Strip repeating running headers/footers and standalone page numbers across pages."""
+    """在横跨各页间剥离重复循环出现的页眉/页脚以及单独占一行的页码。"""
     cleaned: list[str] = []
     n = len(pages)
     for i, r in enumerate(pages):
@@ -178,9 +172,9 @@ def _clean_page_markdown(pages: list[PageResult]) -> list[str]:
 
 
 class StreamingStitcher:
-    """Buffer-and-flush stitcher with last-fragment lookahead.
+    """具有最后一段片段向前查找（lookahead）的缓冲兼刷新拼接器。
 
-    Usage::
+    用法::
 
         stitcher = StreamingStitcher()
         for page_md in pages:
@@ -194,7 +188,7 @@ class StreamingStitcher:
         self._buffer: str = ""
 
     def feed(self, page_md: str) -> Iterator[str]:
-        """Yield confirmed fragments from one page; hold the last one back."""
+        """生成（Yield）来自单页中已经被定稿确认好的片段；而对末尾的那一段作扣留处理。"""
         page_md = page_md.strip()
         if not page_md:
             return
@@ -212,12 +206,12 @@ class StreamingStitcher:
                     self._buffer = _smart_join(self._buffer, fragments[0])
                 fragments = fragments[1:]
                 if not fragments:
-                    # The joined content might continue on the next page;
-                    # keep it buffered until the next feed() call.
+                    # 拼接后的内容可能还在后继的下个页面上延续；
+                    # 故保持将其留在缓冲池中直到对 feed() 的再次调用。
                     return
-                # More blocks follow on the same page — the join is
-                # confirmed complete.  Yield it now so it isn't silently
-                # overwritten by the last-fragment buffer below.
+                # 该页面上后续仍有着多余的块 —— 所以此次的拼接被
+                # 认定作已完结。直接将其产生（Yield）出去以防其在下方由于作为在末尾
+                # 压轴的片段缓存而被无故地覆写掉。
                 yield self._buffer
                 self._buffer = ""
             else:
@@ -233,13 +227,13 @@ class StreamingStitcher:
         self._buffer = fragments[-1]
 
     def finalize(self) -> Iterator[str]:
-        """Flush any held fragment. Idempotent — second call yields nothing."""
+        """将任何处于被扣留池中的片段全都刷新而出。幂等操作 —— 对此的二次调用将不会产出任何新内容。"""
         if self._buffer:
             yield self._buffer
             self._buffer = ""
 
 
-# Step 3 entry point alias for the unified conversion pipeline
+# 用作于统一转换流程中的步骤 3（Step 3）的接入点别名
 step3_stitch_and_clean = stitch_pages
 
 __all__ = [

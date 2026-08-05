@@ -1,7 +1,7 @@
-"""Agent factories for the per-page CrewAI pipeline.
+"""针对逐页 CrewAI 流水线的 Agent 工厂。
 
-Personas are intentionally short so they fit comfortably inside the model's context window.
-The persona strings are exported as ``EXTRACTOR_PERSONA`` so the runner can budget their token cost before issuing each call.
+人设（Personas）故意做得很短，以便能够舒适地放入模型的上下文窗口内。
+人设字符串导出为 ``EXTRACTOR_PERSONA``，以便 runner 可以在发出每次调用之前预算它们的 token 成本。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ EXTRACTOR_PERSONA: str = (
 
 
 def make_extractor(llm: LLM) -> Agent:
-    """Build the multimodal page-extraction agent."""
+    """构建多模态页面提取 agent。"""
     return Agent(
         role="PDF Page Extractor",
         goal=(
@@ -42,7 +42,7 @@ def make_extractor(llm: LLM) -> Agent:
 
 
 def _persona_backstory(persona: str) -> str:
-    """CrewAI's ``backstory`` only sees text after the ``\\n\\n`` separator."""
+    """CrewAI 的 ``backstory`` 只能看到 ``\\n\\n`` 分隔符之后的文本。"""
     if "\n\n" in persona:
         _, _, backstory = persona.partition("\n\n")
         return backstory.strip()

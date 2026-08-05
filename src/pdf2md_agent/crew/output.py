@@ -1,14 +1,13 @@
-"""Helpers for extracting clean text from CrewAI task output.
+"""从 CrewAI 任务输出中提取纯文本的辅助函数。
 
-The crewAI task output is a small ``TaskOutput``-shaped object whose
-``output.raw`` field is the model's raw text. This module isolates two
-small concerns:
+CrewAI 的任务输出是一个小型的类似 ``TaskOutput`` 的对象，其
+``output.raw`` 字段是模型的原始文本。此模块隔离了两个
+小关注点：
 
-* :func:`_strip_think` — defensively remove any ``<think>…</think>``
-  scratchpad blocks the configured MiniMax-M3 endpoint occasionally leaks
-  into its replies.
-* :func:`_output` — pull the ``raw`` field off a task's output object,
-  coercing to ``str`` and stripping think blocks in one place.
+* :func:`_strip_think` — 防御性地删除配置的 MiniMax-M3 端点偶尔泄漏
+  到其回复中的任何 ``<think>…</think>`` 暂存块。
+* :func:`_output` — 从任务的输出对象中提取 ``raw`` 字段，
+  强制转换为 ``str`` 并在一个地方剥离思考块（think blocks）。
 """
 
 from __future__ import annotations
@@ -22,21 +21,21 @@ _THINK_BLOCK_RE = re.compile(_THINK_OPEN + r".*?" + _THINK_CLOSE, re.DOTALL)
 
 
 def _strip_think(text: str) -> str:
-    """Remove inline model reasoning blocks from output.
+    """从输出中删除内联的模型推理块。
 
-    Some models wrap their scratchpad in reasoning tags; the configured
-    MiniMax-M3 endpoint sometimes leaves them in the response. Strip them
-    defensively before downstream consumers see them.
+    一些模型会将它们的暂存过程包装在推理标签中；配置的
+    MiniMax-M3 端点有时会将它们留在响应中。
+    在下游消费者看到它们之前，防御性地将它们剥离。
     """
     return _THINK_BLOCK_RE.sub("", text).strip()
 
 
 def _output(output_text: object) -> str:
-    """Extract clean text from a CrewAI task's output.
+    """从 CrewAI 任务的输出中提取纯文本。
 
-    Handles both real ``TaskOutput`` shapes (with a nested ``output`` and
-    ``.raw``) and bare ``str`` results (returned by tests). Missing or
-    ``None`` outputs degrade to an empty string instead of raising.
+    处理真实的 ``TaskOutput`` 形状（带有嵌套的 ``output`` 和
+    ``.raw``）以及纯 ``str`` 结果（由测试返回）。缺失或
+    ``None`` 的输出会降级为空字符串而不是抛出异常。
     """
     out = getattr(output_text, "output", None)
     if out is None:

@@ -1,4 +1,4 @@
-"""LLM factory: CrewAI LLM preconfigured for MiniMax-M3 vision calls."""
+"""LLM 工厂：为 MiniMax-M3 视觉调用预配置的 CrewAI LLM。"""
 
 from __future__ import annotations
 
@@ -13,13 +13,12 @@ from pdf2md_agent.config import (
 
 
 def make_vision_llm() -> LLM:
-    """Return a CrewAI ``LLM`` pointed at the MiniMax-M3 vision endpoint.
+    """返回一个指向 MiniMax-M3 视觉端点的 CrewAI ``LLM``。
 
-    Uses the native OpenAI provider (``provider="openai"``) so the request is
-    dispatched directly via the OpenAI SDK against a custom ``base_url`` — no
-    LiteLLM dependency required. ``timeout`` is forwarded to the underlying
-    SDK; it surfaces as a per-request socket-level deadline for both the
-    initial connect and the body read.
+    使用原生的 OpenAI provider (``provider="openai"``)，因此请求直接
+    通过 OpenAI SDK 发送到自定义的 ``base_url`` —— 不需要 LiteLLM 依赖。
+    ``timeout`` 被传递到底层 SDK；它表现为初始连接和主体读取两者的
+    每次请求的套接字级截止时间。
     """
     return LLM(
         model=MODEL_NAME,

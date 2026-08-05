@@ -1,4 +1,4 @@
-"""Per-PDF intermediate-file cache: PNG pages, per-page agent outputs."""
+"""每个 PDF 的中间文件缓存：PNG 页面、每页的智能体输出。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ _ATOMIC_TMP_MODE: Final[int] = 0o600
 
 
 def atomic_write_text(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` atomically via a sibling temp file + ``os.replace``."""
+    """通过同目录的临时文件加上 ``os.replace`` 原子的将 ``content`` 写入到 ``path``。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     _fd_unused, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -55,7 +55,7 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class PageArtifacts:
-    """Files written for one page: source PNG, native text, and format markdown."""
+    """为单一页面写入的文件：源 PNG、原生文本和格式化 markdown。"""
 
     page_number: int
     page_png: Path
@@ -65,7 +65,7 @@ class PageArtifacts:
 
 @dataclass(frozen=True, slots=True)
 class CacheLayout:
-    """Directory layout for a PDF's intermediate cache."""
+    """PDF 的中间缓存目录布局。"""
 
     root: Path
     pages_dir: Path
@@ -109,7 +109,7 @@ def write_meta(
     pdf: Path,
     **_kwargs: Any,
 ) -> None:
-    """Serialize run metadata to ``meta_path`` atomically."""
+    """原子性地将运行元数据序列化到 ``meta_path``。"""
     canonical_pdf = pdf.resolve()
     atomic_write_text(
         meta_path,
@@ -123,7 +123,7 @@ def write_meta(
 
 @dataclass(frozen=True, slots=True)
 class MetaInfo:
-    """The on-disk ``meta.json`` payload, parsed and frozen."""
+    """磁盘上的 ``meta.json`` 负载，已解析并冻结。"""
 
     pdf: str
 
@@ -132,7 +132,7 @@ _META_REQUIRED_FIELDS: Final[tuple[str, ...]] = ("pdf",)
 
 
 def read_meta(meta_path: Path) -> MetaInfo | None:
-    """Return parsed ``MetaInfo`` or ``None`` for missing/malformed input."""
+    """返回解析后的 ``MetaInfo``，若输入缺失或格式不正确则返回 ``None``。"""
     if not meta_path.exists():
         return None
     try:
@@ -154,7 +154,7 @@ def check_meta_matches(
     pdf: str,
     **_kwargs: Any,
 ) -> list[str]:
-    """Return a list of mismatch reasons; empty list means match."""
+    """返回一个不匹配原因的列表；空列表表示匹配。"""
     reasons: list[str] = []
     if stored.pdf != pdf:
         reasons.append(f"pdf changed: cached={stored.pdf!r}, current={pdf!r}")
@@ -165,13 +165,13 @@ def check_meta_matches(
 
 
 def is_page_complete(layout: CacheLayout, page_number: int) -> bool:
-    """True if cached format output already exists for this page."""
+    """如果此页面的已缓存格式化输出已存在，则为 True。"""
     return layout.page_format_path(page_number).exists()
 
 
 @dataclass(frozen=True, slots=True)
 class CacheNoCacheFlags:
-    """Per-resource opt-out switches for the no-cache flag family."""
+    """用于无缓存（no-cache）标志系列的按资源选择退出（opt-out）开关。"""
 
     render: bool = False
     text: bool = False
@@ -187,7 +187,7 @@ class CacheNoCacheFlags:
         }
 
     def all(self) -> bool:
-        """True iff every per-resource flag is True (i.e. ``--no-cache-all``)."""
+        """当且仅当每个资源对应的标志都为 True 时，返回 True (即 ``--no-cache-all``)。"""
         return all(self.as_dict().values())
 
 

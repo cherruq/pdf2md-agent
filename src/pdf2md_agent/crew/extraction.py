@@ -1,4 +1,4 @@
-"""Per-page extraction loop: build crew, kickoff, optionally reflect on coverage."""
+"""逐页提取循环：构建 crew、kickoff、可选择性地反思覆盖率。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 
 def _clean_for_coverage(text: str) -> str:
-    """Drop all whitespace for a cheap character-coverage comparison."""
+    """为了进行低成本的字符覆盖率比较，丢弃所有空白字符。"""
     return re.sub(r"\s+", "", text)
 
 
@@ -43,7 +43,7 @@ def _build_crew(
     penalty_prompt: str,
     **_kwargs: object,
 ) -> tuple[Any, Any]:
-    """Construct the extraction crew for one attempt."""
+    """为单次尝试构建提取 crew。"""
     extract_t = _runner.make_extract_task(
         extractor,
         prepared.attach_image_path,
@@ -70,7 +70,7 @@ def _maybe_reflect(
     coverage_text_hint: str,
     reflection_attempts: int,
 ) -> tuple[bool, str]:
-    """Evaluate extraction coverage against the text hint and possibly reflect."""
+    """根据文本提示词评估提取覆盖率并可能进行反思。"""
     if reflection_attempts >= _REFLECTION_MAX_ATTEMPTS:
         return False, ""
 
@@ -111,7 +111,7 @@ def run_extraction_loop(
     config: ConversionConfig,
     llm: LLM,
 ) -> ExtractionOutcome:
-    """Run extraction → (reflect) for one page."""
+    """对单页运行提取 → (反思)。"""
     artifacts = config.layout.artifacts_for(prepared.ctx.page_number)
     extractor = _runner.make_extractor(llm)
     coverage_text_hint = prepared.text_hint_str if config.text_hint else ""

@@ -1,14 +1,10 @@
-"""Page-spec parsing and resolution for the --pages CLI flag.
+"""--pages CLI 标志的页面规范解析和验证。
 
-Two pure functions, no I/O:
+两个纯函数，无 I/O 操作：
 
-- :func:`parse_page_spec` is the argparse ``type=`` callable; it validates
-  syntax and raises :class:`argparse.ArgumentTypeError` on bad input so
-  the CLI rejects malformed specs before opening the PDF.
+- :func:`parse_page_spec` 是 argparse 的 ``type=`` 可调用对象；它验证语法并在输入错误时引发 :class:`argparse.ArgumentTypeError`，以便 CLI 在打开 PDF 之前拒绝格式错误的规范。
 
-- :func:`resolve_pages` dedupes, sorts, and validates a parsed page list
-  against the PDF's actual page count; raises :class:`ValueError` with a
-  user-facing message on out-of-range pages.
+- :func:`resolve_pages` 对解析后的页面列表进行去重、排序，并对照 PDF 的实际页数进行验证；对于超出范围的页面引发带有面向用户消息的 :class:`ValueError`。
 """
 
 from __future__ import annotations
@@ -16,19 +12,13 @@ from __future__ import annotations
 import argparse
 import re
 
-# Regexes (anchored, whitespace-tolerant). The parse step only enforces
-# "positive integer" for tokens; the upper bound is checked later by
-# resolve_pages against the actual PDF page count.
+# 正则表达式（已锚定，容忍空格）。解析步骤仅对 token 强制执行“正整数”限制；上限随后由 resolve_pages 针对实际的 PDF 页数进行检查。
 _TOKEN_RE = re.compile(r"^\s*(\d+)\s*$")
 _RANGE_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d+)\s*$")
 
-# DoS guard: cap the width of any single "N-M" range. Without this,
-# ``--pages 1-999999999999`` would materialize a list of that many
-# integers before we ever reach ``resolve_pages`` (which only sees a
-# positive-integer list and can't tell it came from a huge range).
-# 10_000 pages is roughly the largest real-world PDF a single user would
-# process; beyond that, the spec is almost certainly adversarial or
-# a typo (e.g. meant 1-999 and the trailing 9 was lost).
+# 拒绝服务（DoS）保护：限制任何单个 "N-M" 范围的宽度。如果没有这个限制，
+# ``--pages 1-999999999999`` 会在我们到达 ``resolve_pages``（它只看到正整数列表，无法判断其来自一个巨大的范围）之前实体化一个包含这么多整数的列表。
+# 10_000 页大约是单个用户会处理的最大的现实世界 PDF；超过这个数字，该规范几乎肯定是恶意的或者是一个输入错误（例如原本想输入 1-999，但丢失了尾随的 9）。
 _MAX_RANGE_SPAN = 10_000
 
 
@@ -37,17 +27,13 @@ def _err(msg: str) -> argparse.ArgumentTypeError:
 
 
 def parse_page_spec(spec: str) -> list[int]:
-    """Parse a --pages value like ``'1-5,8,11-13'`` into ``[1,2,3,4,5,8,11,12,13]``.
+    """将类似 ``'1-5,8,11-13'`` 的 --pages 值解析为 ``[1,2,3,4,5,8,11,12,13]``。
 
-    Comma-separated items, each either a single page number (``8``) or a
-    range (``1-5``). Whitespace around numbers and around the ``-`` is
-    tolerated.
+    逗号分隔的项目，每个项目可以是单个页码（``8``）或一个范围（``1-5``）。容忍数字和 ``-`` 周围的空格。
 
-    Page numbers must be positive integers (``>= 1``); the upper bound is
-    not enforced here (that's :func:`resolve_pages`'s job, since it
-    depends on the actual PDF).
+    页码必须是正整数（``>= 1``）；此处不强制执行上限（这是 :func:`resolve_pages` 的工作，因为它取决于实际的 PDF）。
 
-    Raises :class:`argparse.ArgumentTypeError` on any malformed input.
+    对于任何格式错误的输入，引发 :class:`argparse.ArgumentTypeError`。
     """
     if not isinstance(spec, str) or not spec.strip():
         raise _err(f"expected integer or N-M, got {spec!r}")
@@ -91,18 +77,14 @@ def parse_page_spec(spec: str) -> list[int]:
 
 
 def resolve_pages(spec: list[int], total: int) -> list[int]:
-    """Dedupe, sort, and validate a parsed page list against ``total``.
+    """对照 ``total`` 对解析后的页面列表进行去重、排序和验证。
 
-    Returns a new list of unique page numbers in ascending order, all
-    within ``[1, total]``.
+    返回一个新的唯一页码列表，按升序排列，所有页码都在 ``[1, total]`` 范围内。
 
-    Raises :class:`ValueError` on the first out-of-range page
-    encountered, with a message of the form ``"page N out of range (PDF
-    has M pages)"`` so the CLI can surface it directly.
+    在遇到第一个超出范围的页码时引发 :class:`ValueError`，消息格式为 ``"page N out of range (PDF
+    has M pages)"``，以便 CLI 可以直接向用户显示。
 
-    An empty result cannot arise: :func:`parse_page_spec` guarantees
-    each item is a positive integer, and dedupe of a non-empty list is
-    non-empty. No defensive empty-list check is needed.
+    不会出现空结果：:func:`parse_page_spec` 保证每个项都是正整数，非空列表的去重结果也是非空的。不需要进行防御性的空列表检查。
     """
     if total < 1:
         raise ValueError(f"PDF has {total} pages; nothing to convert")

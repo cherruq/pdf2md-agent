@@ -1,4 +1,4 @@
-"""Project configuration loaded from environment variables at import time."""
+"""在导入时从环境变量加载的项目配置。"""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ MODEL_NAME: Final[str] = _env("PDF2MD_AGENT_MODEL", "MiniMax-M3")
 
 
 def require_api_key() -> str:
-    """Return the OpenAI API key from the environment, or raise with guidance."""
+    """从环境中返回 OpenAI API 密钥，或者抛出包含引导信息的异常。"""
     value = _env("OPENAI_API_KEY")
     if not value:
         raise RuntimeError("OPENAI_API_KEY is not set. Copy .env.example to .env and fill it in.")
@@ -102,7 +102,7 @@ _HARD_CODED_CTX_LIMITS: Final[dict[str, int]] = {
 
 @functools.lru_cache(maxsize=1)
 def resolve_ctx_limit() -> int:
-    """Resolve the model's context-window token budget."""
+    """解析模型的上下文窗口（context-window）token 预算。"""
     raw = _env("PDF2MD_AGENT_CTX_LIMIT")
     if raw:
         try:
@@ -147,7 +147,7 @@ RETRY_JITTER: Final[float] = 0.25
 
 @dataclass(slots=True, frozen=True)
 class ConversionConfig:
-    """Immutable configuration struct for a single PDF-to-Markdown conversion job."""
+    """单次 PDF 到 Markdown 转换任务的不可变配置结构体。"""
 
     pdf: Path
     output: Path

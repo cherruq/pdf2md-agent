@@ -1,4 +1,4 @@
-"""Convert PDF documents to markdown via a CrewAI vision pipeline."""
+"""通过 CrewAI 视觉流水线将 PDF 文档转换为 markdown 格式。"""
 
 from __future__ import annotations
 

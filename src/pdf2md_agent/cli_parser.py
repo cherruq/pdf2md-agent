@@ -1,4 +1,4 @@
-"""argparse builder and CLI argument post-processing."""
+"""argparse 构建器和命令行参数(CLI)后处理。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ _NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
 )
 
 
-# --- argparse actions & validators -----------------------------------------
+# --- argparse 动作与验证器 -----------------------------------------
 
 
 class _VersionAction(argparse.Action):
@@ -37,7 +37,7 @@ class _VersionAction(argparse.Action):
 
 
 class _NoCacheAllAction(argparse.Action):
-    """Sets every ``--no-cache-*`` flag to True when ``--no-cache-all`` is set."""
+    """当设置 ``--no-cache-all`` 时，将所有的 ``--no-cache-*`` 标志设置为 True。"""
 
     def __call__(
         self,
@@ -75,14 +75,14 @@ def _positive_int_type(name: str, minimum: int) -> Callable[[str], int]:
 
 
 def _safe_intermediates_dir(value: str) -> Path:
-    """argparse validator for ``--intermediates-dir``, rejecting '..' segments."""
+    """``--intermediates-dir`` 的 argparse 验证器，拒绝 '..' 路径片段。"""
     p = Path(value)
     if any(part == ".." for part in p.parts):
         raise argparse.ArgumentTypeError(f"--intermediates-dir must not contain '..' segments: {value!r}")
     return p
 
 
-# --- Post-parse resolvers --------------------------------------------------
+# --- 解析后解析器 --------------------------------------------------
 
 
 def _resolve_no_cache_flags(args: argparse.Namespace) -> CacheNoCacheFlags:
@@ -103,7 +103,7 @@ def _resolve_layout(
 
 
 def build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
-    """Build a :class:`RetryConfig` from CLI args (override) + env (fallback)."""
+    """从命令行参数（覆盖优先级）和环境变量（回退优先级）构建 :class:`RetryConfig`。"""
     from pdf2md_agent.config import (
         RETRY_INITIAL_DELAY,
         RETRY_JITTER,
@@ -126,7 +126,7 @@ def build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
         return None
 
 
-# --- Parser definition -----------------------------------------------------
+# --- 解析器定义 -----------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -1,24 +1,21 @@
-"""Per-page image preparation: token-budget planning, downscaling, tiling.
+"""逐页图像准备：token 预算规划、降采样（降分辨率）、切片。
 
-Each call to the vision model inlines the page as a base64 data URL. The
-model's context window is finite, so for any non-trivial page the runner
-needs to (a) estimate the cost of the persona + per-page prompt + image,
-(b) if that exceeds the budget, downscale or split the page into tiles.
+每次调用视觉模型时都会将页面作为 base64 data URL 内联。由于模型的
+上下文窗口是有限的，因此对于任何非简单的页面，runner 都需要
+(a) 估算人设 + 逐页提示词 + 图像的成本，
+(b) 如果超出预算，则对页面进行降采样或分割成多个切片。
 
-This module isolates that preparation from the rest of the pipeline:
+此模块将这些准备工作与流水线的其余部分隔离开来：
 
-* :func:`prepare_page_image` — the entry point the runner calls once per
-  page. Returns a :class:`PreparedPage` describing which image (or tiles)
-  to attach.
-* :func:`_resize_page_png` — LANCZOS downscale to a JPEG copy.
-* :func:`_make_tiles` — split an oversized page into two vertical tiles
-  with a small overlap; used when even the smallest allowed downscale
-  won't fit the budget.
+* :func:`prepare_page_image` — runner 每页调用一次的入口点。
+  返回一个 :class:`PreparedPage`，描述要附加哪个图像（或切片）。
+* :func:`_resize_page_png` — 使用 LANCZOS 算法降采样为 JPEG 副本。
+* :func:`_make_tiles` — 将过大的页面分割成两个带少量重叠的
+  垂直切片；当允许的最小降采样仍然无法满足预算时使用。
 
-The LANCZOS + JPEG re-encode here mirrors what
-:func:`pdf2md_agent.crew.multimodal_patch._encode_local_image` does in
-memory, so the on-disk resized cache file looks identical to what the
-patch would produce inline.
+这里的 LANCZOS + JPEG 重新编码与
+:func:`pdf2md_agent.crew.multimodal_patch._encode_local_image` 在内存中的操作一致，
+因此磁盘上经过调整大小的缓存文件看起来与内联修补程序生成的结果完全相同。
 """
 
 from __future__ import annotations
@@ -49,12 +46,11 @@ log = logging.getLogger("pdf2md_agent.runner")
 
 
 def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_quality: int) -> None:
-    """Render ``src`` to ``dst`` as a downscaled JPEG.
+    """将 ``src`` 渲染到 ``dst`` 作为降采样后的 JPEG。
 
-    Uses the same LANCZOS resampler as
-    :func:`pdf2md_agent.crew.multimodal_patch._encode_local_image` so the
-    pre-resized cache file looks identical to what the in-memory patch
-    would produce inline.
+    使用与 :func:`pdf2md_agent.crew.multimodal_patch._encode_local_image` 相同的
+    LANCZOS 重采样器，因此预先调整大小后的缓存文件看起来与内存中补丁
+    内联生成的结果完全相同。
     """
     from PIL import Image
 
@@ -66,18 +62,18 @@ def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_qualit
 
 
 def _resized_cache_path(layout: CacheLayout, page_number: int) -> Path:
-    """Path for the downscaled JPEG copy of ``page_number``."""
+    """``page_number`` 的降采样 JPEG 副本路径。"""
     return layout.pages_dir / f"page_{page_number:04d}_resized.jpg"
 
 
 def _make_tiles(page: RenderedPage, pages_dir: Path, *, jpeg_quality: int) -> tuple[Path, Path]:
-    """Split ``page.image_path`` into two vertically-stacked JPEG tiles.
+    """将 ``page.image_path`` 分割成两个垂直堆叠的 JPEG 切片。
 
-    The tiles overlap by 10% of the page height so any text near the
-    boundary still appears in one of the two halves. Returns
-    ``(tile1_path, tile2_path)``; both are written under ``pages_dir``.
-    Cached: if the tile files already exist on disk they are reused
-    without re-cropping.
+    切片在页面高度上重叠 10%，以便边界附近的任何文本
+    仍会出现在这两半中的一个里面。返回
+    ``(tile1_path, tile2_path)``；两者都写入在 ``pages_dir`` 下。
+    已缓存：如果切片文件已经存在于磁盘上，它们将被重用，
+    而不会重新裁剪。
     """
     from PIL import Image
 
@@ -108,13 +104,12 @@ def prepare_page_image(
     text_hint_str: str,
     config: ConversionConfig,
 ) -> PreparedPage:
-    """Plan and produce the image(s) the extractor should attach.
+    """规划并生成提取器应当附加的图像。
 
-    The runner passes the exact same strings (`text_hint`, etc.)
-    that will eventually build the extract task. If the total text + image
-    tokens exceed `ctx_limit` * `token_budget_safety`, the image is iteratively
-    downscaled (binary search) until it fits. If it cannot fit even at
-    `image_min_long_side`, the layout falls back to tile splitting (!32).
+    runner 传递最终将构建提取任务的完全相同的字符串（`text_hint` 等）。
+    如果总的文本 + 图像 tokens 超过了 `ctx_limit` * `token_budget_safety`，
+    图像会被迭代降采样（二分查找）直到满足要求。如果即使在 `image_min_long_side`
+    下也无法容纳，则布局将回退到切片分割（!32）。
     """
     layout = config.layout
     image_long_side = config.image_long_side

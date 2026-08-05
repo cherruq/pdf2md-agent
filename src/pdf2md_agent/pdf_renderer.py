@@ -1,4 +1,4 @@
-"""Render a PDF to per-page PNG images + native text layer via PyMuPDF."""
+"""使用 PyMuPDF 将 PDF 渲染为按页的 PNG 图片 + 原生文本层。"""
 
 from __future__ import annotations
 
@@ -22,22 +22,18 @@ def render_pdf(
     prefix: str = "page",
     pages: list[int] | None = None,
 ) -> list[RenderedPage]:
-    """Render ``pdf_path`` into per-page PNGs under ``output_dir``.
+    """在 ``output_dir`` 下将 ``pdf_path`` 渲染为每页对应的 PNG。
 
-    If ``pages`` is ``None`` (default), renders every page in document
-    order. If ``pages`` is a list of 1-based page numbers, renders only
-    those pages (still in document order — the list is sorted internally)
-    and skips the rest. Output filenames always use the **original**
-    1-based page number, so cache directories are stable across calls
-    with different ``pages`` selections.
+    如果 ``pages`` 为 ``None`` (默认)，会按文档顺序渲染每一页。如果 ``pages``
+    是由从 1 开始的页码组成的列表，则仅渲染那些页面 (依然按文档顺序 —— 在内部
+    会对列表排序) 并跳过其他页。输出的文件名总是采用 **原本** 从 1 开始
+    的页码，因此在有着不同 ``pages`` 选项的跨次调用中缓存目录可以保持稳定。
 
-    For each rendered page, also writes a sibling
-    ``{prefix}_{NNNN}_text.txt`` containing the PDF's native text layer
-    (empty for scanned pages).
+    对于每一个已渲染的页面，也会同时写入位于同目录且带有该页 PDF
+    原生文本层内容的 ``{prefix}_{NNNN}_text.txt`` (对于扫描版页面内容为空)。
 
-    Returns the pages in document order. Caller is responsible for
-    ``output_dir`` existing; the function writes into it but does not
-    create it.
+    按文档顺序返回这些页面。由调用者负责保证 ``output_dir`` 的存在；
+    函数负责往该目录内写入而不会进行创建。
     """
     doc = pymupdf.open(pdf_path)
     try:
@@ -70,7 +66,7 @@ def _render_single_page(
     *,
     extracted_text: str | None = None,
 ) -> RenderedPage:
-    """Render a single PyMuPDF page to PNG and write its native text layer."""
+    """将单个 PyMuPDF 页面渲染为 PNG 并写入其原生文本层。"""
     if extracted_text is None:
         extracted_text = page.get_text("text", sort=True)
     pix = page.get_pixmap(matrix=matrix, alpha=False)
@@ -87,19 +83,19 @@ def _render_single_page(
 
 
 def _page_artifact_paths(output_dir: Path, prefix: str, page_number: int) -> tuple[Path, Path]:
-    """Return ``(png_path, text_path)`` for one rendered page.
+    """返回渲染单页面所需的 ``(png_path, text_path)``。
 
-    Per-page filenames embed the 1-based ``page_number``, so each call
-    produces a fresh ``Path`` pair; the helper exists to consolidate the
-    construction (matches the layout used by :mod:`pdf2md_agent.cache`)
-    and keep the render loop readable.
+    单页面文件名中内嵌着从 1 开始的 ``page_number``，因此每一处调用
+    都能生成全新的一对 ``Path``；设置该辅助函数是为了合并构建过程
+    (用来匹配 :mod:`pdf2md_agent.cache` 中的缓存目录布局) 并且保证
+    渲染循环的可读性。
     """
     stem = f"{prefix}_{page_number:04d}"
     return output_dir / f"{stem}.png", output_dir / f"{stem}_text.txt"
 
 
 def read_page_text(text_path: Path) -> str:
-    """Read a per-page text file written by :func:`render_pdf`, safely ignoring I/O errors."""
+    """读取由 :func:`render_pdf` 写入的单页面文本文件，并且能够安全的忽略 I/O 错误。"""
     try:
         if not text_path.exists():
             return ""
@@ -109,7 +105,7 @@ def read_page_text(text_path: Path) -> str:
 
 
 def _is_cached_png_valid(png_path: Path) -> bool:
-    """Return whether ``png_path`` exists and is non-empty without raising I/O errors."""
+    """返回 ``png_path`` 是否存在且非空，而不会抛出 I/O 错误。"""
     try:
         return png_path.is_file() and png_path.stat().st_size > 0
     except OSError:
@@ -117,7 +113,7 @@ def _is_cached_png_valid(png_path: Path) -> bool:
 
 
 def _is_cached_text_valid(txt_path: Path, expected_text: str) -> bool:
-    """Return whether ``txt_path`` exists and matches ``expected_text`` without raising I/O errors."""
+    """返回 ``txt_path`` 是否存在且与 ``expected_text`` 相匹配，而不会抛出 I/O 错误。"""
     try:
         if not txt_path.is_file():
             return False
@@ -127,7 +123,7 @@ def _is_cached_text_valid(txt_path: Path, expected_text: str) -> bool:
 
 
 def pdf_page_count(pdf: Path) -> int:
-    """Return the total page count of a PDF file via PyMuPDF."""
+    """通过 PyMuPDF 返回一个 PDF 文件的总页数。"""
     doc = pymupdf.open(pdf)
     try:
         return doc.page_count
@@ -136,7 +132,7 @@ def pdf_page_count(pdf: Path) -> int:
 
 
 def render_pages(config: ConversionConfig) -> list[RenderedPage]:
-    """Render the PDF, invalidating step 2 cache on real-time text drift or no-cache flags."""
+    """渲染该 PDF，在遭遇实时的文本内容漂移或启用无缓存标志时让步骤 2 (Step 2) 缓存失效。"""
     if config.no_cache.render or config.no_cache.text:
         return render_pdf(config.pdf, config.render_target, dpi=config.dpi, pages=config.resolved_pages)
 

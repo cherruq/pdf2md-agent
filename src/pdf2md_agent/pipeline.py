@@ -1,4 +1,4 @@
-"""Pipeline orchestration and configuration for pdf2md-agent conversion."""
+"""pdf2md-agent 转换的流水线(Pipeline)编排与配置。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ log = logging.getLogger("pdf2md_agent.pipeline")
 
 
 def run_unified_conversion(config: ConversionConfig) -> int:
-    """Execute the unified 3-step PDF-to-Markdown conversion pipeline."""
+    """执行统一的 3 步 PDF 到 Markdown 转换流水线。"""
     log.info("converting %s", config.pdf)
     log.info("  output:          %s", config.output)
     log.info("  cache:           %s", config.layout.root)
@@ -59,12 +59,12 @@ def run_unified_conversion(config: ConversionConfig) -> int:
         pdf=config.pdf,
     )
 
-    # --- Step 1: Static Render & Real-time Text Cache Synchronization ---
+    # --- 步骤 1: 静态渲染与实时文本缓存同步 ---
     log.info("Step 1: rendering PDF to PNGs at %d dpi%s...", config.dpi, " (subset)" if config.resolved_pages else "")
     pages: list[RenderedPage] = _render_pages(config)
     log.info("Step 1 done: rendered %d page(s) to %s", len(pages), config.render_target)
 
-    # --- Step 2: Parallel Per-Page AI Extraction Loop ---
+    # --- 步骤 2: 并行的逐页 AI 提取循环 ---
     log.info("Step 2: running per-page extraction and formatting pipeline")
     llm = make_vision_llm()
     log.info(
@@ -87,7 +87,7 @@ def run_unified_conversion(config: ConversionConfig) -> int:
         llm=llm,
     )
 
-    # --- Step 3: Global Post-processing, Cleanup & Cross-Page Stitching ---
+    # --- 步骤 3: 全局后处理、清理与跨页拼接(Stitching) ---
     stitch_mode = StitchMode(config.stitch_mode)
     markdown = stitch_pages(results, mode=stitch_mode)
     log.info("Step 3: stitch (%s) done", stitch_mode.value)

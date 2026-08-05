@@ -1,8 +1,7 @@
-"""Centralized data structures for the per-page extraction pipeline.
+"""用于按页提取流水线的集中式数据结构。
 
-These structures represent the inputs, context, and outputs of the various
-steps in the pipeline. They are ordered chronologically based on when they
-are created and used in the processing lifecycle of a single page.
+这些结构代表了流水线各个步骤的输入、上下文和输出。
+它们是根据单个页面的处理生命周期中创建和使用的时间按时间顺序排列的。
 """
 
 from __future__ import annotations
@@ -13,33 +12,32 @@ from pathlib import Path
 from pdf2md_agent.cache import PageArtifacts
 
 
-# 1. Pipeline Context
+# 1. 流水线上下文
 @dataclass(frozen=True, slots=True)
 class PageRunContext:
-    """Read-only global metadata for the current page being processed.
+    """当前正在处理的页面的只读全局元数据。
     
-    This struct is threaded through the pipeline to provide logging context
-    and progress tracking metadata without polluting individual function signatures.
+    该结构体贯穿整个流水线，以提供日志记录上下文和进度跟踪元数据，
+    而不会污染各个函数的签名。
     """
 
     page_number: int
-    """The physical page number of the page."""
+    """该页的物理页码。"""
     idx: int
-    """The 1-based index of the current page being processed in the pipeline batch."""
+    """当前正在处理的页面在流水线批次中基于 1 的索引。"""
     total: int
-    """The total number of pages in the current pipeline batch."""
+    """当前流水线批次中的总页数。"""
     page_started: float
-    """``time.monotonic()`` snapshot taken at the start of the page pipeline —
-    used by the caller to log per-page elapsed time."""
+    """在页面流水线开始时获取的 ``time.monotonic()`` 快照 ——
+    由调用者用于记录每页的耗时。"""
 
 
-# 2. Rendered PDF Page
+# 2. 渲染的 PDF 页面
 @dataclass(frozen=True, slots=True)
 class RenderedPage:
-    """One rendered PDF page: raster image artifact and native text layer.
+    """一个渲染后的 PDF 页面：栅格化图像产物和原生文本层。
     
-    This is the output of the PDF rendering stage and serves
-    as the primary data input for the rest of the extraction pipeline.
+    这是 PDF 渲染阶段的输出，并作为提取流水线其余部分的主要数据输入。
     """
 
     width: int
@@ -50,79 +48,75 @@ class RenderedPage:
     text: str = ""
 
 
-# 3. Image Preparation Output
+# 3. 图像准备输出
 @dataclass(frozen=True, slots=True)
 class PreparedPage:
-    """Inputs prepared for the extraction loop (Output of Step 1).
+    """为提取循环准备的输入（步骤 1 的输出）。
 
-    This structure carries the original rendered page and the image that
-    should actually be attached to the LLM (which may be downscaled or tiled).
+    此结构包含原始渲染页面和实际应附加到 LLM 的图像（可能已缩小或切片）。
     """
 
     page: RenderedPage
-    """The original rendered PDF page."""
+    """原始渲染的 PDF 页面。"""
     text_hint_str: str
-    """Text layer content or empty string."""
+    """文本层内容或空字符串。"""
     attach_image_path: Path
-    """Path the task should reference. Equal to ``page.image_path`` for
-    pages that already fit the budget at their original size, or a downscaled
-    cache path if resized."""
+    """任务应引用的路径。对于在原始大小下已经符合预算的页面，
+    等于 ``page.image_path``，或者如果调整了大小，则是缩小的缓存路径。"""
     is_tiled: bool
-    """True if the page was split into ``tile_paths`` (extreme budget case)."""
+    """如果页面被拆分为 ``tile_paths``（极端预算情况），则为 True。"""
     tile_paths: list[Path]
-    """Half-overlap JPEG tiles; empty when ``is_tiled`` is False."""
+    """一半重叠的 JPEG 切片；当 ``is_tiled`` 为 False 时为空。"""
     ctx: PageRunContext
-    """The pipeline context for the current page."""
+    """当前页面的流水线上下文。"""
 
 
-# 4. Extraction Step Output
+# 4. 提取步骤输出
 @dataclass(frozen=True, slots=True)
 class ExtractionOutcome:
-    """Result of one page's extraction loop (Output of Step 2).
+    """单页提取循环的结果（步骤 2 的输出）。
 
-    This struct captures whether the extraction succeeded via the vision model,
-    or if it fell back to the text-layer stub.
+    此结构体捕获通过视觉模型提取是否成功，或者是否降级/回退到文本层存根。
     """
 
     format_md: str
-    """The final markdown content generated (either vision output or fallback stub)."""
+    """生成的最终 markdown 内容（视觉模型输出或回退存根）。"""
     succeeded: bool
-    """True if the vision extraction succeeded cleanly."""
+    """如果视觉提取顺利成功，则为 True。"""
     fell_back: bool
-    """True if the vision model failed and we fell back to the text layer."""
+    """如果视觉模型失败且我们降级到文本层，则为 True。"""
     ctx: PageRunContext
-    """The pipeline context for the current page."""
+    """当前页面的流水线上下文。"""
 
 
-# 5. Fallback Execution Input
+# 5. 回退执行输入
 @dataclass(frozen=True, slots=True)
 class FallbackRecord:
-    """Arguments bundled for the text layer fallback handler.
+    """为文本层回退处理程序打包的参数。
 
-    Bundling the fields keeps the call sites readable; the runner
-    threads one of these through to the helper on every fallback path.
+    打包字段可保持调用站点的可读性；运行器将其中一个传递给每个回退路径上的辅助函数。
     """
 
     artifacts: PageArtifacts
-    """The file paths for the cache artifacts of the current page."""
+    """当前页面缓存产物的文件路径。"""
     completion_label: str
-    """Label for logging (e.g., 'fallback', 'validation-fallback')."""
+    """日志记录标签（例如，'fallback'，'validation-fallback'）。"""
     ctx: PageRunContext
-    """The pipeline context for the current page."""
+    """当前页面的流水线上下文。"""
 
 
-# 6. Pipeline Output
+# 6. 流水线输出
 @dataclass(frozen=True, slots=True)
 class PageResult:
-    """One page's final output (Output of Step 3).
+    """单页的最终输出（步骤 3 的输出）。
 
-    The ultimate result yielded by the runner back to the CLI layer.
+    运行器生成并返回到 CLI 层的最终结果。
     """
 
     page_number: int
-    """The physical page number."""
+    """物理页码。"""
     markdown: str
-    """The final processed markdown content."""
+    """最终处理的 markdown 内容。"""
 
 
 __all__ = [

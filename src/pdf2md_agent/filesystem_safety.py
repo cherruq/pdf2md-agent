@@ -1,16 +1,10 @@
-"""Filesystem-safety helpers for cache directory naming.
+"""用于缓存目录命名的文件系统安全辅助函数。
 
-Pure functions used by the CLI and the cache layout to compute a
-deterministic, filesystem-safe directory name for a PDF's intermediate
-cache. Two concerns live here:
+由 CLI 和缓存布局使用的纯函数，用于计算 PDF 中间缓存的
+确定性、文件系统安全的目录名。此处解决两个问题：
 
-* :func:`safe_cache_stem` — sanitize a PDF's filename stem so it never
-  collides with Windows reserved device names (``CON``, ``PRN``, …) and
-  never produces a bare dot/space-only directory.
-* :func:`cache_key_for_pdf` — combine the sanitized stem with a
-  hash-based fallback for stems that are too long or contain path
-  separators, so two distinct absolute paths always land in distinct
-  cache directories.
+* :func:`safe_cache_stem` — 净化 PDF 的文件名主干（stem），使其永远不会与 Windows 保留设备名（``CON``，``PRN``，…）冲突，并且永远不会生成只有点/空格的目录。
+* :func:`cache_key_for_pdf` — 将净化后的主干与针对过长或包含路径分隔符的主干的基于哈希的回退方案结合，以便两个不同的绝对路径始终对应不同的缓存目录。
 """
 
 from __future__ import annotations
@@ -22,29 +16,20 @@ from pathlib import Path
 _WINDOWS_RESERVED_NAMES: frozenset[str] = frozenset(
     {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
 )
-"""Windows reserved device names: ``CON``/``PRN``/``AUX``/``NUL`` plus
-``COM1``-``COM9`` and ``LPT1``-``LPT9``. Case-insensitive on Windows.
+"""Windows 保留设备名：``CON``/``PRN``/``AUX``/``NUL`` 以及
+``COM1``-``COM9`` 和 ``LPT1``-``LPT9``。在 Windows 上不区分大小写。
 
-The ``CreateFile`` syscall rejects these as bare filenames (with or
-without an extension), and ``mkdir`` on a reserved name surfaces as an
-opaque ``OSError``. We append a single ``_`` so the cache lives at
-``<reserved>_`` instead of crashing the run."""
+``CreateFile`` 系统调用拒绝将这些作为裸文件名（无论有无扩展名），并且在保留名称上执行 ``mkdir`` 会表现为不透明的 ``OSError``。我们附加一个 ``_`` ，使得缓存位于 ``<reserved>_`` 而不是导致运行崩溃。"""
 
 _MAX_CACHE_STEM_LEN: int = 60
 
 
 def safe_cache_stem(stem: str) -> str:
-    """Return a filesystem-safe cache directory name derived from ``stem``.
+    """返回从 ``stem`` 派生的文件系统安全的缓存目录名称。
 
-    Strips trailing dots/spaces and appends ``_`` to Windows reserved
-    names on Windows so ``mkdir`` succeeds. On non-Windows platforms
-    trailing dots/spaces are still stripped defensively for portability.
+    剥离尾随的点/空格，并在 Windows 上的 Windows 保留名称后附加 ``_`` ，以便 ``mkdir`` 成功。在非 Windows 平台上，尾随的点/空格仍然被防御性地剥离以保证可移植性。
 
-    Case-collision (D16-002): on case-insensitive filesystems (NTFS,
-    APFS, HFS+) two PDFs whose stems differ only in case map to the
-    same cache directory. We do not canonicalize here — instead,
-    callers are warned via this function's docstring to pick distinct
-    stems.
+    大小写冲突 (D16-002)：在不区分大小写的文件系统（NTFS，APFS，HFS+）上，仅大小写不同的两个 PDF 将映射到同一个缓存目录。我们在这里不进行规范化 —— 相反，通过此函数的文档字符串警告调用者选择不同的主干。
     """
     if not stem:
         return "_"
@@ -57,14 +42,9 @@ def safe_cache_stem(stem: str) -> str:
 
 
 def cache_key_for_pdf(pdf: Path) -> str:
-    """Return a deterministic cache directory name for ``pdf``.
+    """返回 ``pdf`` 的确定性缓存目录名称。
 
-    Uses the PDF's stem when it is short, free of path separators, and not
-    a Windows-reserved name. For long stems, names that contain ``/``
-    (e.g. when the PDF lives under a deeply-nested tree), or
-    Windows-reserved stems on a Windows host, the cache key is a
-    16-character SHA-256 digest of the absolute PDF path — deterministic
-    per file, never collides between different absolute paths.
+    当 PDF 的主干很短，没有路径分隔符，并且不是 Windows 保留名称时，使用 PDF 的主干。对于过长的主干，包含 ``/`` 的名称（例如，当 PDF 位于深度嵌套的树下时），或 Windows 主机上 Windows 保留的主干，缓存键是绝对 PDF 路径的 16 字符 SHA-256 摘要 —— 每个文件具有确定性，不同绝对路径之间绝不会发生冲突。
     """
     abs_path = pdf.resolve()
     stem = safe_cache_stem(abs_path.stem)
