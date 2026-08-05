@@ -35,7 +35,7 @@ cli.main
        ├─ _resolve_layout(...)                  ← cli_parser.py (CacheLayout + render-target)
        ├─ build_retry_config(args)              ← cli_parser.py (CLI override + env fallback)
        ├─ config = ConversionConfig(...)         ← config.py (assemble immutable job configuration)
-       └─ pipeline.run_unified_conversion(config) (aliased in cli as _run_pipeline for backward test compatibility)
+       └─ pipeline.run_unified_conversion(config)
             ├─ read_meta + check_meta_matches   ← cache.py (drift refusal)
             ├─ write_meta                       ← cache.py (fingerprint)
             ├─ Step 1: _render_pages (pdf_renderer.py: static render & real-time text drift invalidation)

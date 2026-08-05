@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Final
 
 from dotenv import load_dotenv
 
-from pdf2md_agent.tuning import (  # noqa: F401 — re-exported in __all__ for backward compatibility
+from pdf2md_agent.tuning import (
     DEFAULT_IMAGE_JPEG_QUALITY,
     DEFAULT_IMAGE_LONG_SIDE,
     DEFAULT_STITCH_MODE,
@@ -20,6 +20,7 @@ from pdf2md_agent.tuning import (  # noqa: F401 — re-exported in __all__ for b
     IMAGE_MIN_LONG_SIDE,
     TOKEN_BUDGET_SAFETY_DEFAULT,
 )
+
 
 if TYPE_CHECKING:
     from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags

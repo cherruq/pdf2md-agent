@@ -13,23 +13,23 @@ from pdf2md_agent.config import (
     MODEL_NAME,
     ConversionConfig,
 )
-from pdf2md_agent.crew.agents import (  # noqa: F401  re-exports kept for backward-compat with test surface
+from pdf2md_agent.crew.agents import (  # noqa: F401  re-exports kept for test patching surface
     EXTRACTOR_BACKSTORY,
     make_extractor,
 )
 from pdf2md_agent.crew.extraction import run_extraction_loop
-from pdf2md_agent.crew.fallback import (  # noqa: F401  re-exports kept for backward-compat with test surface
+from pdf2md_agent.crew.fallback import (  # noqa: F401  re-exports kept for test patching surface
     _record_text_layer_fallback,
     _text_layer_fallback,
 )
 from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
-from pdf2md_agent.crew.output import _output, _strip_think  # noqa: F401  re-exports kept for backward-compat with test surface
-from pdf2md_agent.crew.page_image import (  # noqa: F401  re-exports kept for backward-compat with test surface
+from pdf2md_agent.crew.output import _output, _strip_think  # noqa: F401  re-exports kept for test patching surface
+from pdf2md_agent.crew.page_image import (  # noqa: F401  re-exports kept for test patching surface
     _resize_page_png,
     prepare_page_image,
 )
 from pdf2md_agent.crew.types import PageResult, PageRunContext
-from pdf2md_agent.crew.tasks import (  # noqa: F401  re-exports kept for backward-compat with test surface
+from pdf2md_agent.crew.tasks import (  # noqa: F401  re-exports kept for test patching surface
     make_extract_task,
 )
 from crewai import Crew, Process  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.Crew` without `create=True`
