@@ -3,7 +3,7 @@
 Targets (per findings.md):
 - D8-003  ``cli._resolve_layout``
 - D8-005  ``cli.cmd_convert`` (integration with mocked LLM + IO)
-- D8-006  ``cli._run_pipeline`` (mocked render/run_pipeline/stitch + atomic write)
+- D8-006  ``pipeline.run_unified_conversion`` (mocked render/run_pipeline/stitch + atomic write)
 - D8-007  ``runner._resize_page_png`` (Pillow resize, long-side applied)
 - D8-009  ``runner._record_text_layer_fallback`` (format.md writes)
 - D8-010  ``runner._text_layer_fallback`` (markdown stub shape)
@@ -40,14 +40,18 @@ from pdf2md_agent.crew.multimodal_patch import (
     _to_data_url,
     _to_sentinel,
 )
-from pdf2md_agent.crew.runner import (
+from pdf2md_agent.crew.types import ExtractionOutcome
+from pdf2md_agent.crew.types import (
+    PageRunContext,
     PageResult,
+)
+from pdf2md_agent.crew.runner import (
     _output,
     _record_text_layer_fallback,
     _resize_page_png,
     _text_layer_fallback,
 )
-from pdf2md_agent.pdf_renderer import RenderedPage
+from pdf2md_agent.crew.types import RenderedPage
 
 
 # --- helpers ---------------------------------------------------------------
@@ -160,7 +164,7 @@ def test_cmd_convert_happy_path_writes_output_atomically(
     png_path = pages_dir / "page_0001.png"
     Image.new("RGB", (72, 72), "white").save(png_path, "PNG")
     page = RenderedPage(
-        page_number=1,
+        ctx=PageRunContext(page_number=1, idx=1, total=1, page_started=0.0),
         width=72,
         height=72,
         image_path=png_path,
@@ -208,24 +212,24 @@ def test_cmd_convert_rejects_legacy_reformat_flag(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# D8-006 — cli._run_pipeline (atomic write on the output path)
+# D8-006 — pipeline.run_unified_conversion (atomic write on the output path)
 # ===========================================================================
 
 
 def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
     tmp_path: Path,
 ) -> None:
-    """``_run_pipeline`` writes the stitched output via the atomic-write helper."""
+    """``run_unified_conversion`` writes the stitched output via the atomic-write helper."""
     pdf = _make_onepage_pdf(tmp_path / "in.pdf")
     out_path = tmp_path / "out.md"
     args = _build_minimal_args(tmp_path, pdf)
     args.output = out_path
 
     page = RenderedPage(
-        page_number=1,
-        width=72,
-        height=72,
-        image_path=tmp_path / "page_0001.png",
+        ctx=PageRunContext(page_number=1, idx=1, total=1, page_started=0.0),
+        width=100,
+        height=100,
+        image_path=Path("page_0001.png"),
     )
     layout = CacheLayout.for_pdf(tmp_path / ".pdf2md-agent-cache" / "in", pdf)
 
@@ -249,8 +253,11 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
         _PIL.new("RGB", (72, 72), "white").save(layout.pages_dir / "page_0001.png", "PNG")
         from pdf2md_agent.cache import CacheNoCacheFlags
 
-        rc = cli._run_pipeline(
-            args=args,
+        from pdf2md_agent.config import ConversionConfig
+        config = ConversionConfig(
+            pdf=args.pdf,
+            output=args.output,
+            dpi=args.dpi,
             layout=layout,
             render_target=layout.pages_dir,
             resolved_pages=None,
@@ -258,7 +265,14 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
             fallback_to_text=True,
             started=__import__("time").monotonic(),
             no_cache=CacheNoCacheFlags(),
+            text_hint=True,
+            image_long_side=1536,
+            image_jpeg_quality=75,
+            ctx_limit=4096,
+            request_timeout_seconds=300,
+            stitch_mode="heuristic",
         )
+        rc = pipeline.run_unified_conversion(config)
 
     assert rc == 0
     assert mock_atomic.call_count == 1
@@ -320,12 +334,12 @@ def _make_page_artifacts(tmp_path: Path, page_number: int, text: str):
     """Build a ``PageArtifacts`` with a populated ``page_text.txt`` for fallback testing."""
     layout = CacheLayout.for_pdf(tmp_path / "cache", tmp_path / "x.pdf")
     page = RenderedPage(
-        page_number=page_number,
+        ctx=PageRunContext(page_number=page_number, idx=page_number, total=10, page_started=0.0),
         width=100,
         height=100,
         image_path=tmp_path / "page.png",
     )
-    artifacts = layout.artifacts_for(page)
+    artifacts = layout.artifacts_for(page_number)
     artifacts.page_text.write_text(text, encoding="utf-8")
     return artifacts
 
@@ -333,34 +347,41 @@ def _make_page_artifacts(tmp_path: Path, page_number: int, text: str):
 def test_record_text_layer_fallback_writes_format(tmp_path: Path) -> None:
     """Format cache file written; format.md has the stub marker."""
     artifacts = _make_page_artifacts(tmp_path, 1, "raw pdf text\n")
-
-    result = _record_text_layer_fallback(
+    from pdf2md_agent.crew.types import RenderedPage
+    ctx = PageRunContext(
+        page_number=1,
         idx=1,
         total=1,
-        page_number=1,
         page_started=0.0,
+    )
+
+    result = _record_text_layer_fallback(
+        ctx=ctx,
         artifacts=artifacts,
         completion_label="fallback",
     )
 
-    assert isinstance(result, PageResult)
-    assert result.page_number == 1
-    assert "vision model unavailable" in result.markdown
+    assert isinstance(result, str)
+    assert "vision model unavailable" in result
     assert "raw pdf text" in artifacts.format_markdown.read_text(encoding="utf-8")
 
 
 def test_record_text_layer_fallback_returns_consistent_page_result(tmp_path: Path) -> None:
-    """``PageResult`` shape preserves page_number."""
+    """``str`` shape preserves fallback format."""
     artifacts = _make_page_artifacts(tmp_path, 7, "page 7 text\n")
-    result = _record_text_layer_fallback(
+    from pdf2md_agent.crew.types import RenderedPage
+    ctx = PageRunContext(
+        page_number=7,
         idx=7,
         total=10,
-        page_number=7,
         page_started=0.0,
+    )
+    result = _record_text_layer_fallback(
+        ctx=ctx,
         artifacts=artifacts,
         completion_label="validation-fallback",
     )
-    assert result.page_number == 7
+    assert "page 7 text" in result
 
 
 # ===========================================================================

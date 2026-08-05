@@ -19,7 +19,8 @@ from pdf2md_agent.filesystem_safety import safe_cache_stem as _safe_cache_stem
 from pdf2md_agent.cache import atomic_write_text as _atomic_write_text
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
 from pdf2md_agent.crew.runner import _strip_think
-from pdf2md_agent.pdf_renderer import RenderedPage, read_page_text, render_pdf
+from pdf2md_agent.crew.types import PageRunContext, RenderedPage
+from pdf2md_agent.pdf_renderer import read_page_text, render_pdf
 
 
 # --- CacheLayout ----------------------------------------------------------
@@ -36,8 +37,8 @@ def test_cache_layout_for_pdf_creates_subdirs(tmp_path: Path) -> None:
 
 def test_cache_layout_artifacts_for_round_trip(tmp_path: Path) -> None:
     layout = CacheLayout.for_pdf(tmp_path / "out", tmp_path / "x.pdf")
-    page = RenderedPage(page_number=3, width=100, height=100, image_path=tmp_path / "p3.png")
-    a = layout.artifacts_for(page)
+    page = RenderedPage(ctx=PageRunContext(page_number=3, idx=3, total=10, page_started=0.0), width=100, height=100, image_path=tmp_path / "p3.png")
+    a = layout.artifacts_for(3)
     assert a.page_number == 3
     assert a.page_png == layout.page_png_path(3)
     assert a.page_text == layout.page_text_path(3)
@@ -76,7 +77,7 @@ def test_read_page_text_round_trip(tmp_path: Path) -> None:
     pdf = _make_onepage_pdf(tmp_path / "x.pdf")
     pages = render_pdf(pdf, tmp_path, dpi=72)
     assert len(pages) == 1
-    txt = read_page_text(pages[0].image_path.with_name(f"page_{pages[0].page_number:04d}_text.txt"))
+    txt = read_page_text(pages[0].image_path.with_name(f"page_{pages[0].ctx.page_number:04d}_text.txt"))
     assert "page 1" in txt
 
 

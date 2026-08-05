@@ -10,7 +10,8 @@ import pytest
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import ConversionConfig
 from pdf2md_agent.llm_retry import RetryConfig
-from pdf2md_agent.pdf_renderer import RenderedPage, render_pages, render_pdf
+from pdf2md_agent.crew.types import RenderedPage
+from pdf2md_agent.pdf_renderer import render_pages, render_pdf
 
 
 def _make_pdf(path: Path, pages: int = 2) -> Path:
@@ -33,7 +34,7 @@ def test_render_pdf_writes_one_png_per_page(tmp_path: Path) -> None:
     pages = render_pdf(pdf, out, dpi=72)
 
     assert len(pages) == 3
-    assert [p.page_number for p in pages] == [1, 2, 3]
+    assert [p.ctx.page_number for p in pages] == [1, 2, 3]
     assert all(p.image_path.exists() for p in pages)
     assert all(p.width > 0 and p.height > 0 for p in pages)
 
@@ -63,7 +64,7 @@ def test_render_pdf_subset_writes_only_requested_pages(tmp_path: Path) -> None:
     pages = render_pdf(pdf, out, dpi=72, pages=[2])
 
     assert len(pages) == 1
-    assert pages[0].page_number == 2
+    assert pages[0].ctx.page_number == 2
     assert (out / "page_0002.png").exists()
     assert (out / "page_0002_text.txt").exists()
     assert not (out / "page_0001.png").exists()
@@ -78,7 +79,7 @@ def test_render_pdf_subset_preserves_original_page_numbers(tmp_path: Path) -> No
     pages = render_pdf(pdf, out, dpi=72, pages=[3, 1])
 
     # Sorted ascending in the returned list.
-    assert [p.page_number for p in pages] == [1, 3]
+    assert [p.ctx.page_number for p in pages] == [1, 3]
     # But output filenames use the ORIGINAL page number.
     assert (out / "page_0001.png").exists()
     assert (out / "page_0003.png").exists()
@@ -94,7 +95,7 @@ def test_render_pdf_subset_full_coverage(tmp_path: Path) -> None:
 
     pages = render_pdf(pdf, out, dpi=72, pages=[1, 2])
 
-    assert [p.page_number for p in pages] == [1, 2]
+    assert [p.ctx.page_number for p in pages] == [1, 2]
     assert (out / "page_0001.png").exists()
     assert (out / "page_0002.png").exists()
 

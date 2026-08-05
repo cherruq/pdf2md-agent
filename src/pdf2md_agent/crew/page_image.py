@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from pdf2md_agent.cache import CacheLayout
 from pdf2md_agent.pdf_renderer import RenderedPage
+from pdf2md_agent.crew.types import PageRunContext, PreparedPage
 from pdf2md_agent.image_budget import plan_for_image
 from pdf2md_agent.token_estimator import (
     estimate_image_tokens,
@@ -45,22 +46,6 @@ if TYPE_CHECKING:
     from pdf2md_agent.config import ConversionConfig
 
 log = logging.getLogger("pdf2md_agent.runner")
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedPage:
-    """Which image(s) to attach to the extractor for one page."""
-
-    attach_image_path: Path
-    """Path the task should reference. Equal to ``page.image_path`` for
-    pages that already fit the budget at their original size."""
-    is_tiled: bool
-    """True if the page was split into ``tile_paths`` (extreme budget case)."""
-    tile_paths: list[Path]
-    """Half-overlap JPEG tiles; empty when ``is_tiled`` is False."""
-    page_started: float
-    """``time.monotonic()`` snapshot taken right before the LLM call —
-    used by the caller to log per-page elapsed time."""
 
 
 def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_quality: int) -> None:
@@ -96,8 +81,8 @@ def _make_tiles(page: RenderedPage, pages_dir: Path, *, jpeg_quality: int) -> tu
     """
     from PIL import Image
 
-    tile1_path = pages_dir / f"page_{page.page_number:04d}_tile1.jpg"
-    tile2_path = pages_dir / f"page_{page.page_number:04d}_tile2.jpg"
+    tile1_path = pages_dir / f"page_{ctx.page_number:04d}_tile1.jpg"
+    tile2_path = pages_dir / f"page_{ctx.page_number:04d}_tile2.jpg"
 
     if tile1_path.is_file() and tile2_path.is_file():
         return tile1_path, tile2_path
@@ -122,8 +107,6 @@ def prepare_page_image(
     page: RenderedPage,
     text_hint_str: str,
     config: ConversionConfig,
-    idx: int,
-    total: int,
 ) -> PreparedPage:
     """Plan and produce the image(s) the extractor should attach.
 
@@ -154,9 +137,9 @@ def prepare_page_image(
     current_img_tokens = estimate_image_tokens(page.image_path)
     log.info(
         "  [%d/%d] page %d: tokens est. total=%d (text=%d, img=%d), target_long_side=%d, reason=%s",
-        idx,
-        total,
-        page.page_number,
+        page.ctx.idx,
+        page.ctx.total,
+        page.ctx.page_number,
         decision.total,
         persona_tokens + fixed_text_tokens,
         current_img_tokens,
@@ -164,70 +147,52 @@ def prepare_page_image(
         decision.reason,
     )
 
-    pages_dir = layout.pages_dir
+    is_tiled = False
+    tile_paths: list[Path] = []
+    attach_path: Path
 
     if not decision.fits:
-        # Even the smallest allowed downscale won't fit — split into
-        # two tiles so the model sees the page in two passes.
         log.warning(
             "  [%d/%d] page %d: Extreme downscaling needed, splitting into tiles.",
-            idx,
-            total,
-            page.page_number,
+            page.ctx.idx,
+            page.ctx.total,
+            page.ctx.page_number,
         )
-        tile1_path, tile2_path = _make_tiles(
+        tile1, tile2 = _make_tiles(
             page,
-            pages_dir,
+            layout.pages_dir,
             jpeg_quality=image_jpeg_quality,
         )
-        log.info(
-            "  [%d/%d] page %d: extract + format starting",
-            idx,
-            total,
-            page.page_number,
-        )
-        return PreparedPage(
-            attach_image_path=page.image_path,
-            is_tiled=True,
-            tile_paths=[tile1_path, tile2_path],
-            page_started=time.monotonic(),
-        )
-
-    needs_resize = decision.needed_long_side < image_long_side
-    if needs_resize:
-        resized_path = _resized_cache_path(layout, page.page_number)
-        if not resized_path.is_file():
-            pages_dir.mkdir(parents=True, exist_ok=True)
+        is_tiled = True
+        tile_paths = [tile1, tile2]
+        attach_path = page.image_path
+    elif decision.needed_long_side < image_long_side:
+        downscaled_path = _resized_cache_path(layout, page.ctx.page_number)
+        if not downscaled_path.is_file():
+            layout.pages_dir.mkdir(parents=True, exist_ok=True)
             _resize_page_png(
                 page.image_path,
-                resized_path,
+                downscaled_path,
                 target_long_side=decision.needed_long_side,
                 jpeg_quality=image_jpeg_quality,
             )
-        log.info(
-            "  [%d/%d] page %d: extract + format starting",
-            idx,
-            total,
-            page.page_number,
-        )
-        return PreparedPage(
-            attach_image_path=resized_path,
-            is_tiled=False,
-            tile_paths=[],
-            page_started=time.monotonic(),
-        )
+        attach_path = downscaled_path
+    else:
+        attach_path = page.image_path
 
     log.info(
         "  [%d/%d] page %d: extract + format starting",
-        idx,
-        total,
-        page.page_number,
+        page.ctx.idx,
+        page.ctx.total,
+        page.ctx.page_number,
     )
     return PreparedPage(
-        attach_image_path=page.image_path,
-        is_tiled=False,
-        tile_paths=[],
-        page_started=time.monotonic(),
+        page=page,
+        ctx=page.ctx,
+        text_hint_str=text_hint_str,
+        attach_image_path=attach_path,
+        is_tiled=is_tiled,
+        tile_paths=tile_paths,
     )
 
 

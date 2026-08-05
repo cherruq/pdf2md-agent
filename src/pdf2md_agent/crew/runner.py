@@ -17,6 +17,7 @@ from pdf2md_agent.crew.agents import (  # noqa: F401  re-exports kept for backwa
     EXTRACTOR_BACKSTORY,
     make_extractor,
 )
+from pdf2md_agent.crew.extraction import run_extraction_loop
 from pdf2md_agent.crew.fallback import (  # noqa: F401  re-exports kept for backward-compat with test surface
     _record_text_layer_fallback,
     _text_layer_fallback,
@@ -27,7 +28,7 @@ from pdf2md_agent.crew.page_image import (  # noqa: F401  re-exports kept for ba
     _resize_page_png,
     prepare_page_image,
 )
-from pdf2md_agent.crew.results import PageResult
+from pdf2md_agent.crew.types import PageResult, PageRunContext
 from pdf2md_agent.crew.tasks import (  # noqa: F401  re-exports kept for backward-compat with test surface
     make_extract_task,
 )
@@ -43,25 +44,27 @@ def _process_single_page(
     page: RenderedPage,
     config: ConversionConfig,
     llm: LLM,
-    idx: int,
-    total: int,
 ) -> tuple[PageResult, bool]:
     """Process a single PDF page through short-circuits or the full extraction loop."""
     # Lazy import to keep the runner ↔ extraction import order acyclic.
     from pdf2md_agent.crew.extraction import run_extraction_loop
 
-    artifacts = config.layout.artifacts_for(page)
+    from dataclasses import replace
+    ctx = replace(page.ctx, page_started=time.monotonic())
+    page = replace(page, ctx=ctx)
+
+    artifacts = config.layout.artifacts_for(ctx.page_number)
 
     # Short-circuit: format.md cached → trust.
-    if not config.no_cache.format and is_page_complete(config.layout, page.page_number):
+    if not config.no_cache.format and is_page_complete(config.layout, ctx.page_number):
         cached_md = artifacts.format_markdown.read_text(encoding="utf-8").strip()
         log.info(
             "  [%d/%d] page %d: cached, skipping",
-            idx,
-            total,
-            page.page_number,
+            ctx.idx,
+            ctx.total,
+            ctx.page_number,
         )
-        return PageResult(page.page_number, cached_md), False
+        return PageResult(ctx.page_number, cached_md), False
 
     # Full pipeline path.
     text_hint_str = ""
@@ -71,36 +74,29 @@ def _process_single_page(
         page=page,
         text_hint_str=text_hint_str,
         config=config,
-        idx=idx,
-        total=total,
     )
 
     outcome = run_extraction_loop(
-        page=page,
         prepared=prepared,
         config=config,
         llm=llm,
-        text_hint_str=text_hint_str,
-        idx=idx,
-        total=total,
     )
 
     if outcome.fell_back:
-        assert outcome.page_result is not None
-        return outcome.page_result, True
+        return PageResult(ctx.page_number, outcome.format_md), True
 
     artifacts.format_markdown.write_text(outcome.format_md, encoding="utf-8")
 
-    elapsed = time.monotonic() - prepared.page_started
+    elapsed = time.monotonic() - ctx.page_started
     log.info(
         "  [%d/%d] page %d: done in %.1fs (%s chars)",
-        idx,
-        total,
-        page.page_number,
+        ctx.idx,
+        ctx.total,
+        ctx.page_number,
         elapsed,
         f"{len(outcome.format_md):,}",
     )
-    return PageResult(page.page_number, outcome.format_md), False
+    return PageResult(ctx.page_number, outcome.format_md), False
 
 
 def run_pipeline(
@@ -127,17 +123,15 @@ def run_pipeline(
         config.no_cache.as_dict(),
     )
 
-    for idx, page in enumerate(pages, start=1):
+    for page in pages:
         page_res, fell_back = _process_single_page(
             page=page,
             config=config,
             llm=llm,
-            idx=idx,
-            total=total,
         )
         results.append(page_res)
         if fell_back:
-            fallback_pages.append(page.page_number)
+            fallback_pages.append(page.ctx.page_number)
 
     total_elapsed = time.monotonic() - pipeline_started
     log.info(

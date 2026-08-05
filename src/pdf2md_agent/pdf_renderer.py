@@ -8,20 +8,10 @@ from typing import TYPE_CHECKING
 
 import pymupdf
 
+from pdf2md_agent.crew.types import PageRunContext, RenderedPage
+
 if TYPE_CHECKING:
     from pdf2md_agent.config import ConversionConfig
-
-
-@dataclass(frozen=True, slots=True)
-class RenderedPage:
-    """One rendered PDF page: raster image artifact and native text layer."""
-
-    page_number: int
-    width: int
-    height: int
-    image_path: Path
-    text_path: Path | None = None
-    text: str = ""
 
 
 def render_pdf(
@@ -55,10 +45,17 @@ def render_pdf(
         matrix = pymupdf.Matrix(zoom, zoom)
         page_numbers = list(range(1, doc.page_count + 1)) if pages is None else sorted(set(pages))
         pages_out: list[RenderedPage] = []
-        for page_number in page_numbers:
+        total = len(page_numbers)
+        for idx, page_number in enumerate(page_numbers, 1):
+            ctx = PageRunContext(
+                page_number=page_number,
+                idx=idx,
+                total=total,
+                page_started=0.0,
+            )
             png, text = _page_artifact_paths(output_dir, prefix, page_number)
             page = doc.load_page(page_number - 1)
-            pages_out.append(_render_single_page(page, page_number, png, text, matrix))
+            pages_out.append(_render_single_page(page, ctx, png, text, matrix))
         return pages_out
     finally:
         doc.close()
@@ -66,9 +63,9 @@ def render_pdf(
 
 def _render_single_page(
     page: pymupdf.Page,
-    page_number: int,
+    ctx: PageRunContext,
     png_path: Path,
-    text_path: Path,
+    txt_path: Path,
     matrix: pymupdf.Matrix,
     *,
     extracted_text: str | None = None,
@@ -78,13 +75,13 @@ def _render_single_page(
         extracted_text = page.get_text("text", sort=True)
     pix = page.get_pixmap(matrix=matrix, alpha=False)
     pix.save(png_path)
-    text_path.write_text(extracted_text, encoding="utf-8")
+    txt_path.write_text(extracted_text, encoding="utf-8")
     return RenderedPage(
-        page_number=page_number,
-        width=pix.width,
-        height=pix.height,
+        width=int(pix.width),
+        height=int(pix.height),
         image_path=png_path,
-        text_path=text_path,
+        ctx=ctx,
+        text_path=txt_path,
         text=extracted_text,
     )
 
@@ -150,11 +147,18 @@ def render_pages(config: ConversionConfig) -> list[RenderedPage]:
         target_pages = (
             list(config.resolved_pages) if config.resolved_pages is not None else list(range(1, doc.page_count + 1))
         )
+        total = len(target_pages)
         zoom = config.dpi / 72
         matrix = pymupdf.Matrix(zoom, zoom)
         pages: list[RenderedPage] = []
 
-        for n in target_pages:
+        for idx, n in enumerate(target_pages, 1):
+            ctx = PageRunContext(
+                page_number=n,
+                idx=idx,
+                total=total,
+                page_started=0.0,
+            )
             png = layout.page_png_path(n)
             txt = layout.page_text_path(n)
             page = doc.load_page(n - 1)
@@ -170,16 +174,16 @@ def render_pages(config: ConversionConfig) -> list[RenderedPage]:
                     jpg_path.unlink(missing_ok=True)
 
             if need_png or not text_valid:
-                pages.append(_render_single_page(page, n, png, txt, matrix, extracted_text=new_text))
+                pages.append(_render_single_page(page, ctx, png, txt, matrix, extracted_text=new_text))
             else:
                 # 有效分支：缓存直接可用
                 with Image.open(png) as img:
                     pages.append(
                         RenderedPage(
-                            page_number=n,
                             width=img.width,
                             height=img.height,
                             image_path=png,
+                            ctx=ctx,
                             text_path=txt,
                             text=new_text,
                         )

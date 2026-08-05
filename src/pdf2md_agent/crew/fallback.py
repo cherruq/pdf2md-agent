@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 
 from pdf2md_agent.cache import PageArtifacts
-from pdf2md_agent.crew.results import PageResult
+from pdf2md_agent.crew.types import FallbackRecord, PageRunContext
 from pdf2md_agent.pdf_renderer import read_page_text
 
 log = logging.getLogger("pdf2md_agent.runner")
@@ -43,62 +43,35 @@ def _text_layer_fallback(artifacts: PageArtifacts) -> str:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class FallbackRecord:
-    """Arguments bundled for :func:`_record_text_layer_fallback`.
-
-    Bundling the fields keeps the call sites readable; the runner
-    threads one of these through to the helper on every fallback path.
-    """
-
-    idx: int
-    total: int
-    page_number: int
-    page_started: float
-    artifacts: PageArtifacts
-    completion_label: str
-
-
 def _record_text_layer_fallback(
     *,
-    idx: int,
-    total: int,
-    page_number: int,
-    page_started: float,
+    ctx: PageRunContext,
     artifacts: PageArtifacts,
     completion_label: str,
-    **_kwargs: object,
-) -> PageResult:
-    """Write the fallback artifacts for one page and return its :class:`PageResult`.
-
-    Keyword arguments keep the call site readable and match the historical
-    signature tests rely on (``patch.object(runner, "_record_text_layer_fallback")``
-    + ``runner._record_text_layer_fallback(idx=..., ...)``).
+) -> str:
+    """Write the fallback artifacts for one page and return the fallback markdown.
 
     Writes the fallback markdown to ``format.md``.
     """
     record = FallbackRecord(
-        idx=idx,
-        total=total,
-        page_number=page_number,
-        page_started=page_started,
         artifacts=artifacts,
         completion_label=completion_label,
+        ctx=ctx,
     )
     format_md = _text_layer_fallback(record.artifacts)
     record.artifacts.format_markdown.write_text(format_md, encoding="utf-8")
 
-    elapsed = time.monotonic() - record.page_started
+    elapsed = time.monotonic() - record.ctx.page_started
     log.info(
         "  [%d/%d] page %d: done in %.1fs (%s, %s chars)",
-        record.idx,
-        record.total,
-        record.page_number,
+        record.ctx.idx,
+        record.ctx.total,
+        record.ctx.page_number,
         elapsed,
         record.completion_label,
         f"{len(format_md):,}",
     )
-    return PageResult(record.page_number, format_md)
+    return format_md
 
 
 __all__ = [

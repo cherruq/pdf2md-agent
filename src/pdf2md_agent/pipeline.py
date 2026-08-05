@@ -17,8 +17,8 @@ from pdf2md_agent.config import (
     ConversionConfig,
 )
 from pdf2md_agent.crew.runner import run_pipeline
+from pdf2md_agent.crew.types import RenderedPage
 from pdf2md_agent.pdf_renderer import (
-    RenderedPage,
     render_pages as _render_pages,
     render_pdf as render_pdf,  # noqa: F401
 )

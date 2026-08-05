@@ -10,9 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pdf2md_agent.pdf_renderer import RenderedPage
-
 log = logging.getLogger("pdf2md_agent.cache")
 
 _ATOMIC_TMP_MODE: Final[int] = 0o600
@@ -94,12 +91,12 @@ class CacheLayout:
     def page_format_path(self, page_number: int) -> Path:
         return self.pages_dir / f"page_{page_number:04d}_format.md"
 
-    def artifacts_for(self, page: RenderedPage) -> PageArtifacts:
+    def artifacts_for(self, page_number: int) -> PageArtifacts:
         return PageArtifacts(
-            page_number=page.page_number,
-            page_png=self.page_png_path(page.page_number),
-            page_text=self.page_text_path(page.page_number),
-            format_markdown=self.page_format_path(page.page_number),
+            page_number=page_number,
+            page_png=self.page_png_path(page_number),
+            page_text=self.page_text_path(page_number),
+            format_markdown=self.page_format_path(page_number),
         )
 
 

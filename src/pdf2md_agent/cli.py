@@ -34,8 +34,10 @@ from pdf2md_agent.tuning import DEFAULT_STITCH_MODE
 from pdf2md_agent.crew.runner import run_pipeline as run_pipeline  # noqa: F401
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import resolve_pages
-from pdf2md_agent.pdf_renderer import (
+from pdf2md_agent.crew.types import (
     RenderedPage as RenderedPage,  # noqa: F401
+)
+from pdf2md_agent.pdf_renderer import (
     render_pages as _render_pages,  # noqa: F401
     render_pdf as render_pdf,  # noqa: F401
 )
@@ -143,40 +145,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     return run_unified_conversion(config)
 
 
-# Backward-compatible wrapper for tests calling _run_pipeline directly
-def _run_pipeline(
-    *,
-    args: argparse.Namespace,
-    layout: CacheLayout,
-    render_target: Path,
-    resolved_pages: list[int] | None,
-    retry_config: RetryConfig,
-    fallback_to_text: bool = True,
-    started: float = 0.0,
-    no_cache: CacheNoCacheFlags,
-) -> int:
-    """Backward-compatible wrapper for tests calling _run_pipeline directly."""
-    if started <= 0.0:
-        started = time.monotonic()
-    config = ConversionConfig(
-        pdf=args.pdf,
-        output=args.output,
-        dpi=args.dpi,
-        layout=layout,
-        render_target=render_target,
-        resolved_pages=resolved_pages,
-        no_cache=no_cache,
-        retry_config=retry_config,
-        text_hint=not getattr(args, "no_text_hint", False),
-        image_long_side=getattr(args, "image_long_side", None) or IMAGE_LONG_SIDE,
-        image_jpeg_quality=getattr(args, "image_quality", None) or IMAGE_JPEG_QUALITY,
-        ctx_limit=getattr(args, "ctx_limit", None) or resolve_ctx_limit(),
-        request_timeout_seconds=getattr(args, "request_timeout", None) or REQUEST_TIMEOUT_SECONDS,
-        stitch_mode=getattr(args, "stitch_mode", DEFAULT_STITCH_MODE),
-        fallback_to_text=fallback_to_text,
-        started=started,
-    )
-    return run_unified_conversion(config)
+
 
 
 # Step 1, 2, 3 aliases for clear 3-step architecture

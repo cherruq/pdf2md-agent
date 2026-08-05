@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from pdf2md_agent.crew.runner import PageResult
+from pdf2md_agent.crew.types import PageResult
 from pdf2md_agent.post_stream import (
     StitchMode,
     StreamingStitcher,

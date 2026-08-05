@@ -11,7 +11,8 @@ from pdf2md_agent import cli
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import ConversionConfig
 from pdf2md_agent.crew import runner
-from pdf2md_agent.crew.runner import RenderedPage, run_pipeline
+from pdf2md_agent.crew.runner import run_pipeline
+from pdf2md_agent.crew.types import PageRunContext, RenderedPage
 from pdf2md_agent.llm_retry import RetryConfig
 
 
@@ -27,7 +28,7 @@ class _FakeTask:
 
 def _page(page_number: int) -> RenderedPage:
     return RenderedPage(
-        page_number=page_number,
+        ctx=PageRunContext(page_number=page_number, idx=page_number, total=10, page_started=0.0),
         width=100,
         height=100,
         image_path=Path(f"page_{page_number:04d}.png"),
