@@ -21,7 +21,9 @@ _NO_REASONING = (
     + chr(60)
     + "/think"
     + chr(62)
-    + " blocks."
+    + " blocks.\n"
+    + "Output the raw markdown text directly. DO NOT wrap your entire response "
+    + "in a global ```markdown code block."
 )
 
 _LANG_RULE = (
@@ -34,7 +36,9 @@ _VERBATIM_RULE = (
     "Verbatim rule: copy the page character-for-character — no "
     "translation, summarization, or invented content; write `[illegible]` "
     "for unreadable glyphs; omit running page-margin headers, footers, "
-    "and page numbers, but MUST preserve document titles and headings."
+    "and page numbers, but MUST preserve document titles and headings. "
+    "For complex diagrams, flowcharts, or charts, provide a detailed "
+    "alt-text description that captures the core data and logical flow."
 )
 
 _COMMON_TASK_RULES: str = f"{_VERBATIM_RULE}\n\n{_LANG_RULE}\n\n{_NO_REASONING}"
