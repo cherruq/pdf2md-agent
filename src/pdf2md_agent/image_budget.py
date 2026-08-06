@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from PIL import Image  # type: ignore[import-not-found]
 from pathlib import Path
 from typing import Final
 
@@ -109,15 +110,7 @@ def _open_for_size(path: Path, *, fallback_bytes: int) -> tuple[int, int]:
     ``Path.stat().st_size``，因此这一估算能够如实反映损坏的数据块
     到底包含了多少数据量。
     """
-    try:
-        from PIL import Image  # type: ignore[import-not-found]
-    except Exception:  # pragma: no cover - Pillow is a hard project dep
-        log.warning(
-            "Pillow not importable in plan_for_image; using bytes-based fallback (%d bytes) for %s",
-            fallback_bytes,
-            path,
-        )
-        return _bytes_to_fallback_size(fallback_bytes)
+
     try:
         with Image.open(path) as img:
             return img.size

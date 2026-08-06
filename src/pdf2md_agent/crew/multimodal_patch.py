@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import base64
 import io
+from crewai.tools.agent_tools.add_image_tool import AddImageTool
+from PIL import UnidentifiedImageError
 import logging
 import threading
 from pathlib import Path

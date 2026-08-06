@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
+import time
+from dataclasses import replace
 from crewai import LLM
 
 from pdf2md_agent.cache import (
@@ -17,7 +19,6 @@ from pdf2md_agent.crew.agents import (  # noqa: F401  re-exports kept for test p
     EXTRACTOR_BACKSTORY,
     make_extractor,
 )
-from pdf2md_agent.crew.extraction import run_extraction_loop
 from pdf2md_agent.crew.fallback import (  # noqa: F401  re-exports kept for test patching surface
     _record_text_layer_fallback,
     _text_layer_fallback,
@@ -49,7 +50,6 @@ def _process_single_page(
     # 延迟导入以保持 runner ↔ extraction 的导入顺序无环。
     from pdf2md_agent.crew.extraction import run_extraction_loop
 
-    from dataclasses import replace
     ctx = replace(page.ctx, page_started=time.monotonic())
     page = replace(page, ctx=ctx)
 

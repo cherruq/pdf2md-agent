@@ -11,6 +11,12 @@ from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.filesystem_safety import cache_key_for_pdf
 from pdf2md_agent.llm_retry import RetryConfig
 from pdf2md_agent.pages import parse_page_spec
+from pdf2md_agent.config import (
+    RETRY_INITIAL_DELAY,
+    RETRY_JITTER,
+    RETRY_MAX_ATTEMPTS,
+    RETRY_MAX_DELAY,
+)
 from pdf2md_agent.post_stream import StitchMode
 
 _NO_CACHE_FLAG_NAMES: tuple[str, ...] = (
@@ -104,13 +110,6 @@ def _resolve_layout(
 
 def build_retry_config(args: argparse.Namespace) -> RetryConfig | None:
     """从命令行参数（覆盖优先级）和环境变量（回退优先级）构建 :class:`RetryConfig`。"""
-    from pdf2md_agent.config import (
-        RETRY_INITIAL_DELAY,
-        RETRY_JITTER,
-        RETRY_MAX_ATTEMPTS,
-        RETRY_MAX_DELAY,
-    )
-
     cli_max_attempts = args.max_retries
     if cli_max_attempts == 0:
         cli_max_attempts = None

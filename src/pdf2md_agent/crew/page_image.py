@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import logging
+from PIL import Image
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,8 +53,6 @@ def _resize_page_png(src: Path, dst: Path, *, target_long_side: int, jpeg_qualit
     LANCZOS 重采样器，因此预先调整大小后的缓存文件看起来与内存中补丁
     内联生成的结果完全相同。
     """
-    from PIL import Image
-
     with Image.open(src) as img:
         if img.mode != "RGB":
             img = img.convert("RGB")
@@ -75,10 +74,8 @@ def _make_tiles(page: RenderedPage, pages_dir: Path, *, jpeg_quality: int) -> tu
     已缓存：如果切片文件已经存在于磁盘上，它们将被重用，
     而不会重新裁剪。
     """
-    from PIL import Image
-
-    tile1_path = pages_dir / f"page_{ctx.page_number:04d}_tile1.jpg"
-    tile2_path = pages_dir / f"page_{ctx.page_number:04d}_tile2.jpg"
+    tile1_path = pages_dir / f"page_{page.ctx.page_number:04d}_tile1.jpg"
+    tile2_path = pages_dir / f"page_{page.ctx.page_number:04d}_tile2.jpg"
 
     if tile1_path.is_file() and tile2_path.is_file():
         return tile1_path, tile2_path

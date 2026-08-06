@@ -25,6 +25,7 @@ import logging
 import secrets
 import threading
 import time
+import httpx
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Callable, TypeVar
@@ -158,8 +159,6 @@ class _TimeoutCause(Exception):
 
 def _dummy_request() -> object:
     """用于满足 ``APITimeoutError(request=…)`` 参数要求的占位符 httpx request。"""
-    import httpx
-
     return httpx.Request("GET", "https://example.test/")
 
 

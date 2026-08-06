@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from PIL import Image
 import pymupdf
 
 from pdf2md_agent.crew.types import PageRunContext, RenderedPage
@@ -135,8 +136,6 @@ def render_pages(config: ConversionConfig) -> list[RenderedPage]:
     """渲染该 PDF，在遭遇实时的文本内容漂移或启用无缓存标志时让步骤 2 (Step 2) 缓存失效。"""
     if config.no_cache.render or config.no_cache.text:
         return render_pdf(config.pdf, config.render_target, dpi=config.dpi, pages=config.resolved_pages)
-
-    from PIL import Image
 
     layout = config.layout
     with pymupdf.open(config.pdf) as doc:
