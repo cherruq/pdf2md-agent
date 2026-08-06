@@ -54,6 +54,5 @@ EXTRACTOR_BACKSTORY: str = _persona_backstory(EXTRACTOR_PERSONA)
 
 __all__ = [
     "EXTRACTOR_BACKSTORY",
-    "EXTRACTOR_PERSONA",
     "make_extractor",
 ]

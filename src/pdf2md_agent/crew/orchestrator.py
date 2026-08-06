@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
-import time
 from dataclasses import replace
+import concurrent.futures
 from crewai import LLM
 
 from pdf2md_agent.cache import (
@@ -18,7 +18,7 @@ from pdf2md_agent.config import (
 from pdf2md_agent.crew.extraction import run_extraction_loop
 from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
 from pdf2md_agent.crew.page_image import prepare_page_image
-from pdf2md_agent.crew.types import PageResult, PageRunContext
+from pdf2md_agent.crew.types import PageResult
 from pdf2md_agent.pdf_renderer import RenderedPage, read_page_text
 
 log = logging.getLogger("pdf2md_agent.runner")
@@ -104,15 +104,18 @@ def run_extraction_phase(
         config.no_cache.as_dict(),
     )
 
-    for page in pages:
-        page_res, fell_back = _process_single_page(
-            page=page,
-            config=config,
-            llm=llm,
-        )
-        results.append(page_res)
-        if fell_back:
-            fallback_pages.append(page.ctx.page_number)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+        futures = [executor.submit(_process_single_page, page=p, config=config, llm=llm) for p in pages]
+        for future, page in zip(futures, pages):
+            try:
+                page_res, fell_back = future.result()
+                results.append(page_res)
+                if fell_back:
+                    fallback_pages.append(page.ctx.page_number)
+            except Exception as exc:
+                log.error("Unhandled exception extracting page %d: %s", page.ctx.page_number, exc, exc_info=True)
+                results.append(PageResult(page.ctx.page_number, f"\n<!-- extraction completely failed: {exc} -->\n"))
+                fallback_pages.append(page.ctx.page_number)
 
     total_elapsed = time.monotonic() - pipeline_started
     log.info(
@@ -134,7 +137,4 @@ def run_extraction_phase(
 # 用于统一转换流水线的第 2 步入口点别名
 step2_extract_pages = run_extraction_phase
 
-__all__ = [
-    "run_extraction_phase",
-    "step2_extract_pages",
-]
+__all__ = ["run_extraction_phase"]

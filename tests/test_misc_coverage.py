@@ -37,7 +37,12 @@ def test_cache_layout_for_pdf_creates_subdirs(tmp_path: Path) -> None:
 
 def test_cache_layout_artifacts_for_round_trip(tmp_path: Path) -> None:
     layout = CacheLayout.for_pdf(tmp_path / "out", tmp_path / "x.pdf")
-    page = RenderedPage(ctx=PageRunContext(page_number=3, idx=3, total=10, page_started=0.0), width=100, height=100, image_path=tmp_path / "p3.png")
+    page = RenderedPage(
+        ctx=PageRunContext(page_number=3, idx=3, total=10, page_started=0.0),
+        width=100,
+        height=100,
+        image_path=tmp_path / "p3.png",
+    )
     a = layout.artifacts_for(3)
     assert a.page_number == 3
     assert a.page_png == layout.page_png_path(3)

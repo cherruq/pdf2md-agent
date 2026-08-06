@@ -34,6 +34,10 @@ def run_unified_conversion(config: ConversionConfig) -> int:
     log.info("  pages:           %s", "all" if config.resolved_pages is None else config.resolved_pages)
     log.info("  no-cache:        %s", config.no_cache.as_dict())
     log.info("  text-hint:       %s", "on" if config.text_hint else "off")
+    log.info("  workers:         %d", config.max_workers)
+
+    # --- Fail-fast 校验大模型配置 ---
+    llm = make_vision_llm()
 
     existing_meta = read_meta(config.layout.meta_path)
     if existing_meta is not None and not config.no_cache.all():
@@ -63,7 +67,6 @@ def run_unified_conversion(config: ConversionConfig) -> int:
 
     # --- 步骤 2: 并行的逐页 AI 提取循环 ---
     log.info("Step 2: running per-page extraction and formatting pipeline")
-    llm = make_vision_llm()
     log.info(
         "  retry:           max_attempts=%s, initial_delay=%.1fs, fibonacci, max_delay=%.1fs, jitter=±%.0f%%",
         config.retry_config.max_attempts if config.retry_config.max_attempts is not None else "\u221e",
@@ -86,7 +89,7 @@ def run_unified_conversion(config: ConversionConfig) -> int:
 
     # --- 步骤 3: 全局后处理、清理与跨页拼接(Stitching) ---
     stitch_mode = StitchMode(config.stitch_mode)
-    markdown = stitch_pages(results, mode=stitch_mode)
+    markdown = stitch_pages(results, llm=llm, mode=stitch_mode)
     log.info("Step 3: stitch (%s) done", stitch_mode.value)
     atomic_write_text(config.output, markdown)
     elapsed = time.monotonic() - config.started

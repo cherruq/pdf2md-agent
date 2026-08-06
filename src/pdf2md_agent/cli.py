@@ -10,13 +10,7 @@ from pathlib import Path
 
 import pymupdf
 
-from pdf2md_agent.cache import (
-    CacheLayout as CacheLayout,  # noqa: F401
-    CacheNoCacheFlags as CacheNoCacheFlags,  # noqa: F401
-    atomic_write_text as atomic_write_text,  # noqa: F401
-    read_meta as read_meta,  # noqa: F401
-    write_meta as write_meta,  # noqa: F401
-)
+
 from pdf2md_agent.cli_parser import (
     _resolve_layout,
     _resolve_no_cache_flags,
@@ -127,13 +121,11 @@ def cmd_convert(args: argparse.Namespace) -> int:
         image_jpeg_quality=getattr(args, "image_quality", None) or IMAGE_JPEG_QUALITY,
         ctx_limit=getattr(args, "ctx_limit", None) or resolve_ctx_limit(),
         request_timeout_seconds=getattr(args, "request_timeout", None) or REQUEST_TIMEOUT_SECONDS,
+        max_workers=getattr(args, "workers", 1),
         stitch_mode=getattr(args, "stitch_mode", DEFAULT_STITCH_MODE),
         started=time.monotonic(),
     )
     return run_unified_conversion(config)
-
-
-
 
 
 __all__ = [

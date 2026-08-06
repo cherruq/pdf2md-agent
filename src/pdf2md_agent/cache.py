@@ -8,7 +8,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, TYPE_CHECKING
+from typing import Any, Final
 
 log = logging.getLogger("pdf2md_agent.cache")
 
@@ -194,7 +194,6 @@ class CacheNoCacheFlags:
 __all__ = [
     "CacheLayout",
     "CacheNoCacheFlags",
-    "MetaInfo",
     "PageArtifacts",
     "atomic_write_text",
     "check_meta_matches",

@@ -5,7 +5,6 @@ from __future__ import annotations
 import difflib
 import logging
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from crewai import LLM, Process, Crew
@@ -14,7 +13,7 @@ from pydantic import ValidationError
 from pdf2md_agent.config import ConversionConfig
 from pdf2md_agent.crew.agents import make_extractor
 from pdf2md_agent.crew.tasks import make_extract_task
-from pdf2md_agent.crew.fallback import _record_text_layer_fallback
+from pdf2md_agent.crew.fallback import handle_extraction_fallback
 from pdf2md_agent.crew.output import _output
 from pdf2md_agent.crew.types import ExtractionOutcome, PageRunContext, PreparedPage
 from pdf2md_agent.llm_retry import (
@@ -149,7 +148,7 @@ def run_extraction_loop(
                 type(exc).__name__,
                 len(exc.errors()),
             )
-            fallback_md = _record_text_layer_fallback(
+            fallback_md = handle_extraction_fallback(
                 ctx=prepared.ctx,
                 artifacts=artifacts,
                 completion_label="validation-fallback",
@@ -170,7 +169,7 @@ def run_extraction_loop(
                 prepared.ctx.page_number,
                 _safe_exc_summary(exc),
             )
-            fallback_md = _record_text_layer_fallback(
+            fallback_md = handle_extraction_fallback(
                 ctx=prepared.ctx,
                 artifacts=artifacts,
                 completion_label="fallback",
