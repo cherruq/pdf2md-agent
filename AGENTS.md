@@ -101,7 +101,7 @@ pdf2md-agent/
 ## ANTI-PATTERNS (do not violate)
 
 - **Do not** import `tiktoken` — heuristic estimator in `token_estimator.py` is the budget source of truth.
-- **Do not** raise `crewai` pin above `0.80,<2` — older versions don't expose `crewai.tools.agent_tools.add_image_tool`.
+- **Do not** lower the `crewai` pin below `0.80` — older versions don't expose `crewai.tools.agent_tools.add_image_tool`.
 - **Do not** replace `print(..., file=sys.stderr)` in `cli.py` with logger calls — CLI user-facing errors are intentional.
 - **Do not** work around `crew/multimodal_patch.py` by importing `crewai.tools` directly in tests — patch `pdf2md_agent.crew.extraction.<name>` instead.
 - **Do not** strip `# type: ignore` comments in `multimodal_patch.py` — three are load-bearing (lines 45, 153, 161).

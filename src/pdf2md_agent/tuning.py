@@ -35,7 +35,6 @@ PENALTY_PROMPT: Final[str] = (
 
 
 __all__ = [
-    "DEFAULT_DPI",
     "DEFAULT_IMAGE_JPEG_QUALITY",
     "DEFAULT_IMAGE_LONG_SIDE",
     "DEFAULT_STITCH_MODE",

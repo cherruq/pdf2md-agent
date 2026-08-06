@@ -10,7 +10,6 @@ import pytest
 from pdf2md_agent import cli
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import ConversionConfig
-from pdf2md_agent.crew import orchestrator
 from pdf2md_agent.crew import extraction
 from pdf2md_agent.crew.orchestrator import run_extraction_phase
 from pdf2md_agent.crew.types import PageRunContext, RenderedPage

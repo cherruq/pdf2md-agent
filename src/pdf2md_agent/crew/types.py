@@ -9,14 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from pdf2md_agent.cache import PageArtifacts
 
 
 # 1. 流水线上下文
 @dataclass(frozen=True, slots=True)
 class PageRunContext:
     """当前正在处理的页面的只读全局元数据。
-    
+
     该结构体贯穿整个流水线，以提供日志记录上下文和进度跟踪元数据，
     而不会污染各个函数的签名。
     """
@@ -36,7 +35,7 @@ class PageRunContext:
 @dataclass(frozen=True, slots=True)
 class RenderedPage:
     """一个渲染后的 PDF 页面：栅格化图像产物和原生文本层。
-    
+
     这是 PDF 渲染阶段的输出，并作为提取流水线其余部分的主要数据输入。
     """
 
@@ -89,22 +88,6 @@ class ExtractionOutcome:
     """当前页面的流水线上下文。"""
 
 
-# 5. 回退执行输入
-@dataclass(frozen=True, slots=True)
-class FallbackRecord:
-    """为文本层回退处理程序打包的参数。
-
-    打包字段可保持调用站点的可读性；运行器将其中一个传递给每个回退路径上的辅助函数。
-    """
-
-    artifacts: PageArtifacts
-    """当前页面缓存产物的文件路径。"""
-    completion_label: str
-    """日志记录标签（例如，'fallback'，'validation-fallback'）。"""
-    ctx: PageRunContext
-    """当前页面的流水线上下文。"""
-
-
 # 6. 流水线输出
 @dataclass(frozen=True, slots=True)
 class PageResult:
@@ -124,6 +107,5 @@ __all__ = [
     "PageRunContext",
     "PreparedPage",
     "ExtractionOutcome",
-    "FallbackRecord",
     "PageResult",
 ]

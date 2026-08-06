@@ -5,14 +5,13 @@ Targets (per findings.md):
 - D8-005  ``cli.cmd_convert`` (integration with mocked LLM + IO)
 - D8-006  ``pipeline.run_unified_conversion`` (mocked render/run_extraction_phase/stitch + atomic write)
 - D8-007  ``runner._resize_page_png`` (Pillow resize, long-side applied)
-- D8-009  ``runner._record_text_layer_fallback`` (format.md writes)
-- D8-010  ``runner._text_layer_fallback`` (markdown stub shape)
+- D8-009  ``runner.handle_extraction_fallback`` (format.md writes and markdown stub shape)
 - D8-011  ``runner._output`` (attribute extraction)
 - D8-014  ``multimodal_patch._encode_local_image`` (JPEG bytes shape)
 - D8-015  ``multimodal_patch._to_data_url`` (data-URL wrapping + pass-through)
 - D8-016  ``multimodal_patch._to_sentinel`` (VISION_IMAGE: prefix + b64 round-trip)
 
-D8-002 ``cli._atomic_write_text`` (alias for ``cache.atomic_write_text``) is
+D8-002 ``cache.atomic_write_text`` is
 already covered transitively by ``tests/test_misc_coverage.py::test_atomic_write_*``
 and ``tests/test_cache.py::test_atomic_write_text_*``.
 
@@ -40,15 +39,13 @@ from pdf2md_agent.crew.multimodal_patch import (
     _to_data_url,
     _to_sentinel,
 )
-from pdf2md_agent.crew.types import ExtractionOutcome
 from pdf2md_agent.crew.types import (
     PageRunContext,
     PageResult,
 )
 from pdf2md_agent.crew.output import _output
 from pdf2md_agent.crew.fallback import (
-    _record_text_layer_fallback,
-    _text_layer_fallback,
+    handle_extraction_fallback,
 )
 from pdf2md_agent.crew.page_image import _resize_page_png
 from pdf2md_agent.crew.types import RenderedPage
@@ -143,7 +140,7 @@ def _build_minimal_args(tmp_path: Path, pdf: Path) -> argparse.Namespace:
         image_long_side=None,
         image_quality=None,
         ctx_limit=None,
-        stitch_mode="heuristic",
+        stitch_mode="auto",
         request_timeout=None,
         model="MiniMax-M3",
     )
@@ -254,6 +251,7 @@ def test_run_extraction_phase_calls_atomic_write_text_with_stitched_markdown(
         from pdf2md_agent.cache import CacheNoCacheFlags
 
         from pdf2md_agent.config import ConversionConfig
+
         config = ConversionConfig(
             pdf=args.pdf,
             output=args.output,
@@ -270,7 +268,7 @@ def test_run_extraction_phase_calls_atomic_write_text_with_stitched_markdown(
             image_jpeg_quality=75,
             ctx_limit=4096,
             request_timeout_seconds=300,
-            stitch_mode="heuristic",
+            stitch_mode="auto",
         )
         rc = pipeline.run_unified_conversion(config)
 
@@ -326,7 +324,7 @@ def test_resize_page_png_no_op_when_target_exceeds_source(tmp_path: Path) -> Non
 
 
 # ===========================================================================
-# D8-009 — runner._record_text_layer_fallback
+# D8-009 — runner.handle_extraction_fallback
 # ===========================================================================
 
 
@@ -347,7 +345,7 @@ def _make_page_artifacts(tmp_path: Path, page_number: int, text: str):
 def test_record_text_layer_fallback_writes_format(tmp_path: Path) -> None:
     """Format cache file written; format.md has the stub marker."""
     artifacts = _make_page_artifacts(tmp_path, 1, "raw pdf text\n")
-    from pdf2md_agent.crew.types import RenderedPage
+
     ctx = PageRunContext(
         page_number=1,
         idx=1,
@@ -355,7 +353,7 @@ def test_record_text_layer_fallback_writes_format(tmp_path: Path) -> None:
         page_started=0.0,
     )
 
-    result = _record_text_layer_fallback(
+    result = handle_extraction_fallback(
         ctx=ctx,
         artifacts=artifacts,
         completion_label="fallback",
@@ -369,14 +367,14 @@ def test_record_text_layer_fallback_writes_format(tmp_path: Path) -> None:
 def test_record_text_layer_fallback_returns_consistent_page_result(tmp_path: Path) -> None:
     """``str`` shape preserves fallback format."""
     artifacts = _make_page_artifacts(tmp_path, 7, "page 7 text\n")
-    from pdf2md_agent.crew.types import RenderedPage
+
     ctx = PageRunContext(
         page_number=7,
         idx=7,
         total=10,
         page_started=0.0,
     )
-    result = _record_text_layer_fallback(
+    result = handle_extraction_fallback(
         ctx=ctx,
         artifacts=artifacts,
         completion_label="validation-fallback",
@@ -385,15 +383,15 @@ def test_record_text_layer_fallback_returns_consistent_page_result(tmp_path: Pat
 
 
 # ===========================================================================
-# D8-010 — runner._text_layer_fallback
+# D8-010 — handle_extraction_fallback stub generation
 # ===========================================================================
 
 
 def test_text_layer_fallback_with_text_contains_stub_marker(tmp_path: Path) -> None:
     """Markdown stub shape: leading italic marker + fenced ``text`` block."""
     artifacts = _make_page_artifacts(tmp_path, 1, "recovered line 1\nrecovered line 2\n")
-
-    md = _text_layer_fallback(artifacts)
+    ctx = PageRunContext(page_number=1, idx=1, total=1, page_started=0.0)
+    md = handle_extraction_fallback(ctx=ctx, artifacts=artifacts, completion_label="test")
 
     assert "*(vision model unavailable" in md
     assert "PDF text layer" in md
@@ -405,8 +403,8 @@ def test_text_layer_fallback_with_text_contains_stub_marker(tmp_path: Path) -> N
 def test_text_layer_fallback_empty_text_returns_no_content_marker(tmp_path: Path) -> None:
     """Empty text layer emits a distinct 'no content recovered' message — no fenced block."""
     artifacts = _make_page_artifacts(tmp_path, 1, "")
-
-    md = _text_layer_fallback(artifacts)
+    ctx = PageRunContext(page_number=1, idx=1, total=1, page_started=0.0)
+    md = handle_extraction_fallback(ctx=ctx, artifacts=artifacts, completion_label="test")
 
     assert "no content recovered" in md
     assert "vision model unavailable" in md
@@ -416,7 +414,8 @@ def test_text_layer_fallback_empty_text_returns_no_content_marker(tmp_path: Path
 def test_text_layer_fallback_strips_text_layer_whitespace(tmp_path: Path) -> None:
     """Whitespace-only text layer is treated the same as empty (no fenced block)."""
     artifacts = _make_page_artifacts(tmp_path, 1, "   \n\n   \n")
-    md = _text_layer_fallback(artifacts)
+    ctx = PageRunContext(page_number=1, idx=1, total=1, page_started=0.0)
+    md = handle_extraction_fallback(ctx=ctx, artifacts=artifacts, completion_label="test")
     assert "no content recovered" in md
 
 

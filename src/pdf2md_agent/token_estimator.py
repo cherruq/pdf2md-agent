@@ -98,7 +98,6 @@ def estimate_image_tokens(path_or_bytes: PathOrBytes, *, mime: str = "image/jpeg
 
 
 __all__ = [
-    "PathOrBytes",
     "estimate_image_tokens",
     "estimate_text_tokens",
 ]

@@ -22,14 +22,12 @@ from __future__ import annotations
 
 import logging
 from PIL import Image
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from typing import TYPE_CHECKING
 from pdf2md_agent.cache import CacheLayout
 from pdf2md_agent.pdf_renderer import RenderedPage
-from pdf2md_agent.crew.types import PageRunContext, PreparedPage
+from pdf2md_agent.crew.types import PreparedPage
 from pdf2md_agent.image_budget import plan_for_image
 from pdf2md_agent.token_estimator import (
     estimate_image_tokens,

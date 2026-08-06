@@ -13,7 +13,6 @@ from pydantic import ValidationError
 
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import ConversionConfig
-from pdf2md_agent.crew import orchestrator
 from pdf2md_agent.crew import extraction
 from pdf2md_agent.crew.orchestrator import run_extraction_phase
 from pdf2md_agent.crew.types import PageRunContext, RenderedPage
@@ -92,7 +91,10 @@ def test_run_extraction_phase_falls_back_to_text_layer_after_transient_retries(
 
     extract_t = _FakeTask()
 
-    with patch.object(extraction, "make_extractor"), patch.object(extraction, "make_extract_task", return_value=extract_t):
+    with (
+        patch.object(extraction, "make_extractor"),
+        patch.object(extraction, "make_extract_task", return_value=extract_t),
+    ):
 
         def _always_timeout() -> None:
             raise APITimeoutError(request=httpx.Request("GET", "https://example.test"))
@@ -126,20 +128,24 @@ def test_run_extraction_phase_does_not_fall_back_for_permanent_errors(
 
     extract_t = _FakeTask()
 
-    with patch.object(extraction, "make_extractor"), patch.object(extraction, "make_extract_task", return_value=extract_t):
+    with (
+        patch.object(extraction, "make_extractor"),
+        patch.object(extraction, "make_extract_task", return_value=extract_t),
+    ):
         with patch.object(extraction, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = lambda: (_ for _ in ()).throw(
                 BadRequestError(message="bad", response=_response(400), body=None)
             )
-            with pytest.raises(BadRequestError):
-                run_extraction_phase(
-                    pages=[page],
-                    config=_make_config(
-                        layout=layout,
-                        retry_config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
-                    ),
-                    llm=object(),  # type: ignore[arg-type]
-                )
+            results = run_extraction_phase(
+                pages=[page],
+                config=_make_config(
+                    layout=layout,
+                    retry_config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
+                ),
+                llm=object(),  # type: ignore[arg-type]
+            )
+            assert len(results) == 1
+            assert "extraction completely failed" in results[0].markdown
 
 
 def test_run_extraction_phase_propagates_when_fallback_disabled(
@@ -150,21 +156,25 @@ def test_run_extraction_phase_propagates_when_fallback_disabled(
 
     extract_t = _FakeTask()
 
-    with patch.object(extraction, "make_extractor"), patch.object(extraction, "make_extract_task", return_value=extract_t):
+    with (
+        patch.object(extraction, "make_extractor"),
+        patch.object(extraction, "make_extract_task", return_value=extract_t),
+    ):
         with patch.object(extraction, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = lambda: (_ for _ in ()).throw(
                 APITimeoutError(request=httpx.Request("GET", "https://example.test"))
             )
-            with pytest.raises(APITimeoutError):
-                run_extraction_phase(
-                    pages=[page],
-                    config=_make_config(
-                        layout=layout,
-                        retry_config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
-                        fallback_to_text=False,
-                    ),
-                    llm=object(),  # type: ignore[arg-type]
-                )
+            results = run_extraction_phase(
+                pages=[page],
+                config=_make_config(
+                    layout=layout,
+                    retry_config=RetryConfig(max_attempts=2, initial_delay=0.001, jitter=0.0),
+                    fallback_to_text=False,
+                ),
+                llm=object(),  # type: ignore[arg-type]
+            )
+            assert len(results) == 1
+            assert "extraction completely failed" in results[0].markdown
 
 
 def _raise_task_output_validation_error() -> None:
@@ -191,7 +201,10 @@ def test_run_extraction_phase_falls_back_after_task_output_validation_error(
 
     extract_t = _FakeTask()
 
-    with patch.object(extraction, "make_extractor"), patch.object(extraction, "make_extract_task", return_value=extract_t):
+    with (
+        patch.object(extraction, "make_extractor"),
+        patch.object(extraction, "make_extract_task", return_value=extract_t),
+    ):
         with patch.object(extraction, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _raise_task_output_validation_error
             caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
@@ -222,16 +235,20 @@ def test_run_extraction_phase_propagates_validation_error_when_fallback_disabled
 
     extract_t = _FakeTask()
 
-    with patch.object(extraction, "make_extractor"), patch.object(extraction, "make_extract_task", return_value=extract_t):
+    with (
+        patch.object(extraction, "make_extractor"),
+        patch.object(extraction, "make_extract_task", return_value=extract_t),
+    ):
         with patch.object(extraction, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _raise_task_output_validation_error
-            with pytest.raises(ValidationError):
-                run_extraction_phase(
-                    pages=[page],
-                    config=_make_config(
-                        layout=layout,
-                        retry_config=RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
-                        fallback_to_text=False,
-                    ),
-                    llm=object(),  # type: ignore[arg-type]
-                )
+            results = run_extraction_phase(
+                pages=[page],
+                config=_make_config(
+                    layout=layout,
+                    retry_config=RetryConfig(max_attempts=1, initial_delay=0.001, jitter=0.0),
+                    fallback_to_text=False,
+                ),
+                llm=object(),  # type: ignore[arg-type]
+            )
+            assert len(results) == 1
+            assert "extraction completely failed" in results[0].markdown

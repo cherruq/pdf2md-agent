@@ -162,6 +162,7 @@ class ConversionConfig:
     image_jpeg_quality: int
     ctx_limit: int
     request_timeout_seconds: float | None
+    max_workers: int = 1
     stitch_mode: str = DEFAULT_STITCH_MODE
     fallback_to_text: bool = FALLBACK_TO_TEXT
     started: float = field(default_factory=time.monotonic)

@@ -178,6 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Default: all pages."
         ),
     )
+    pipeline.add_argument(
+        "--workers",
+        type=_positive_int_type("workers", 1),
+        default=1,
+        help="Number of concurrent pages to extract. Default: 1 (sequential).",
+    )
 
     cache = parser.add_argument_group(
         "Cache control",
@@ -221,11 +227,11 @@ def build_parser() -> argparse.ArgumentParser:
     features.add_argument(
         "--stitch-mode",
         choices=[m.value for m in StitchMode],
-        default=StitchMode.HEURISTIC.value,
+        default=StitchMode.AUTO.value,
         help=(
             "How to join per-page Markdown into the final document. "
-            "'heuristic' (default) merges paragraphs/list items/table rows "
-            "split across page boundaries and drops the '---' page separator. "
+            "'auto' (default) uses the vision LLM to smartly sew page seams, "
+            "resolving broken sentences and dropping repeating headers/footers. "
             "'off' preserves the legacy '\\n\\n---\\n\\n' separator verbatim."
         ),
     )
@@ -284,7 +290,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 __all__ = [
-    "_NO_CACHE_FLAG_NAMES",
     "_resolve_layout",
     "_resolve_no_cache_flags",
     "_safe_intermediates_dir",
