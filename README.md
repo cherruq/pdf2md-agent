@@ -221,8 +221,7 @@ local paths with HTTP 400, so this patch is mandatory.
 ### Retry & fallback
 
 `call_with_retry` wraps each `crew.kickoff()` in Fibonacci-capped backoff
-(1, 1, 2, 3, 5, 8, 13, …) × `--retry-initial-delay`, capped at
-`--retry-max-delay` (default 900s / 15 min), with jitter. By default
+(1, 1, 2, 3, 5, 8, 13, …), capped at 15 min (900s) per attempt, with jitter. By default
 `--max-retries 0` means unlimited transient retries; pass a positive
 integer to bound the budget. On retry exhaustion (or a `ValidationError` from
 malformed model output), the runner can emit a fenced text-layer stub
@@ -252,11 +251,6 @@ When `--intermediates` is on (the default) the runner writes:
     ├── page_0001_resized.jpg  # downscaled JPEG (if needed)
     └── page_0001_format.md    # final CommonMark output
 ```
-
-The cache key is the PDF's stem when it is short and free of path
-separators; otherwise the runner hashes the absolute PDF path into a
-16-character SHA-256 prefix. The key is deterministic — the same
-absolute path always lands in the same cache directory.
 
 ### Cache key
 
@@ -343,57 +337,7 @@ uv run pytest
 # (none committed — the test corpus is synthesized in-memory).
 ```
 
-Module layout:
-
-```
-src/pdf2md_agent/
-├── __main__.py             # `python -m pdf2md-agent` entry
-├── cli.py                  # CLI entry + per-run orchestration
-├── cli_parser.py           # argparse definition + post-parse resolvers
-├── filesystem_safety.py    # cache-key / Windows-reserved-name helpers
-├── cache.py                # per-PDF cache layout, meta fingerprint, FALLBACK_SENTINEL
-├── pages.py                # --pages parser
-├── pdf_renderer.py         # PyMuPDF wrapper
-├── llm_retry.py            # bounded backoff + transient classifier
-├── token_estimator.py      # text + image token heuristics
-├── image_budget.py         # plan_for_image + BudgetDecision (binary search)
-├── vision.py               # CrewAI LLM factory
-├── post_stream.py          # cross-page stitcher (StreamingStitcher + heuristic)
-├── post_stream_decision.py # block split + continuation + smart join + CJK detection
-├── post_stream_table.py    # table-row continuation + header dedup
-└── crew/
-    ├── agents.py           # extractor persona
-    ├── tasks.py            # build_extract_description + factory functions
-    ├── multimodal_patch.py # AddImageTool monkey-patch
-    ├── runner.py           # per-page pipeline orchestrator
-    ├── extraction.py       # per-page extraction loop
-    ├── page_image.py       # token-budget planning + tiling + downscale
-    ├── fallback.py         # text-layer fallback helpers
-    ├── output.py           # _strip_think + _output (CrewAI task output cleanup)
-    └── results.py          # PageResult shared value type
-```
-
-### Testing the matrix
-
-The defaults below reproduce the project's CI surface:
-
-```bash
-pytest -ra tests/
-```
-
-| Test file | Covers |
-|---|---|
-| `test_cache.py` | `CacheLayout`, `MetaInfo`, fingerprint read/match, atomic writes |
-| `test_no_cache.py` | `--no-cache-*` flag family, per-page priority |
-| `test_pages.py` | `parse_page_spec`, `resolve_pages` |
-| `test_pdf_renderer.py` | `render_pdf` shape, PNG + text-layer emit |
-| `test_llm_retry.py` | `RetryConfig` validation + `is_transient` + backoff + timeout guard |
-| `test_token_budget.py` | `estimate_text_tokens`, `estimate_image_tokens`, `plan_for_image` |
-| `test_vision.py` | `make_vision_llm` endpoint wiring + timeout pass-through |
-| `test_orchestrator.py` | `run_extraction_phase` happy-path + fallback + timeout guard |
-| `test_post_stream.py` | `StreamingStitcher` heuristic (paragraph/list/table), finalize semantics, smart CJK/Latin join |
-| `test_misc_coverage.py` | CLI argument groups, version, numeric validation, atomic write |
-| `test_d8_coverage.py` | D8 batch coverage (CLI seams, runner helpers, multimodal patch) |
+For detailed architecture and testing guidelines, see `AGENTS.md` and `CONTRIBUTING.md`.
 
 ## License
 
