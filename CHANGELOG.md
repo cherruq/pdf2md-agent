@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Numeric CLI validation: `--max-retries`, `--image-quality`, `--image-long-side`, `--max-summary-chars`, `--ctx-limit`, `--request-timeout` now reject out-of-range or non-numeric values at the parser.
 
 ### Changed
-- Internal `run_pipeline` signature: `resume: bool` and `reformat: bool = False` removed; the single `no_cache: CacheNoCacheFlags` parameter drives the per-page priority chain (format short-circuit → full pipeline).
+- Internal `run_extraction_phase` signature: `resume: bool` and `reformat: bool = False` removed; the single `no_cache: CacheNoCacheFlags` parameter drives the per-page priority chain (format short-circuit → full pipeline).
 
 ### Breaking
 - Formatter step and `extract.txt` artifact removed: The text-only formatter agent has been removed. The multimodal Extractor agent now directly outputs strict CommonMark to `format.md`. The `--no-cache-extract` flag and intermediate `extract.txt` files have been removed without backward compatibility.

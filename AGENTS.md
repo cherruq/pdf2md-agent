@@ -36,7 +36,7 @@ pdf2md-agent/
 │   ├── post_stream_table.py  # table-row continuation + header dedup
 │   ├── vision.py             # make_vision_llm factory
 │   └── crew/                 # CrewAI orchestration — see crew/AGENTS.md
-│       ├── runner.py         # per-page orchestrator (run_pipeline)
+│       ├── runner.py         # per-page orchestrator (run_extraction_phase)
 │       ├── extraction.py     # per-page extraction loop
 │       ├── page_image.py     # budget planning + tiling + downscale
 │       ├── fallback.py       # text-layer fallback helpers + FallbackRecord
@@ -67,7 +67,7 @@ pdf2md-agent/
 |---|---|---|
 | `pdf2md_agent.cli:main` | cli.py | CLI entry; `pdf2md-agent` script + `python -m pdf2md_agent`; slim gateway into `pipeline.py` |
 | `pdf2md_agent.pipeline.run_unified_conversion` | pipeline.py | 3-step pipeline orchestrator running off immutable `ConversionConfig` struct |
-| `pdf2md_agent.crew.runner.run_pipeline` | crew/runner.py | per-page crew orchestration with `CacheNoCacheFlags` (format short-circuit → full pipeline) |
+| `pdf2md_agent.crew.orchestrator.run_extraction_phase` | crew/orchestrator.py | per-page crew orchestration with `CacheNoCacheFlags` (format short-circuit → full pipeline) |
 | `pdf2md_agent.crew.extraction.run_extraction_loop` | crew/extraction.py | one page's extraction loop |
 | `pdf2md_agent.crew.page_image.prepare_page_image` | crew/page_image.py | budget + downscale + tile-split for one page |
 | `pdf2md_agent.crew.fallback._record_text_layer_fallback` | crew/fallback.py | write the fenced text-layer stub on retry exhaustion |

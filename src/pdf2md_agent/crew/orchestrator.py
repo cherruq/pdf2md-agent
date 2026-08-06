@@ -80,7 +80,7 @@ def _process_single_page(
     return PageResult(ctx.page_number, outcome.format_md), False
 
 
-def run_pipeline(
+def run_extraction_phase(
     *,
     pages: list[RenderedPage],
     config: ConversionConfig,
@@ -132,9 +132,9 @@ def run_pipeline(
 
 
 # 用于统一转换流水线的第 2 步入口点别名
-step2_extract_pages = run_pipeline
+step2_extract_pages = run_extraction_phase
 
 __all__ = [
-    "run_pipeline",
+    "run_extraction_phase",
     "step2_extract_pages",
 ]

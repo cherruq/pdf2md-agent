@@ -40,7 +40,7 @@ cli.main
             ├─ write_meta                       ← cache.py (fingerprint)
             ├─ Step 1: _render_pages (pdf_renderer.py: static render & real-time text drift invalidation)
             ├─ make_vision_llm(...)             (timeout=REQUEST_TIMEOUT_SECONDS)
-            ├─ Step 2: crew.runner.run_pipeline (parallel per-page loop; format skip if valid cache)
+            ├─ Step 2: crew.orchestrator.run_extraction_phase (parallel per-page loop; format skip if valid cache)
             └─ Step 3: post_stream.stitch_pages (global post-processing: strip headers/footers/page-numbers & stitch)
 ```
 

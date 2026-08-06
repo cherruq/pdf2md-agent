@@ -1,4 +1,4 @@
-"""Tests for pdf2md_agent.crew.runner's retry + fallback wiring."""
+"""Tests for pdf2md_agent.crew.orchestrator's retry + fallback wiring."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ from pydantic import ValidationError
 
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import ConversionConfig
-from pdf2md_agent.crew import runner
+from pdf2md_agent.crew import orchestrator
 from pdf2md_agent.crew import extraction
-from pdf2md_agent.crew.runner import run_pipeline
+from pdf2md_agent.crew.orchestrator import run_extraction_phase
 from pdf2md_agent.crew.types import PageRunContext, RenderedPage
 from pdf2md_agent.llm_retry import RetryConfig
 
@@ -83,7 +83,7 @@ def _make_config(
     )
 
 
-def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
+def test_run_extraction_phase_falls_back_to_text_layer_after_transient_retries(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -100,7 +100,7 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
         with patch.object(extraction, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _always_timeout
             caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
-            results = run_pipeline(
+            results = run_extraction_phase(
                 pages=[page],
                 config=_make_config(
                     layout=layout,
@@ -118,7 +118,7 @@ def test_run_pipeline_falls_back_to_text_layer_after_transient_retries(
     assert any("falling back to text layer" in rec.message for rec in caplog.records)
 
 
-def test_run_pipeline_does_not_fall_back_for_permanent_errors(
+def test_run_extraction_phase_does_not_fall_back_for_permanent_errors(
     tmp_path: Path,
 ) -> None:
     page = _page(1)
@@ -132,7 +132,7 @@ def test_run_pipeline_does_not_fall_back_for_permanent_errors(
                 BadRequestError(message="bad", response=_response(400), body=None)
             )
             with pytest.raises(BadRequestError):
-                run_pipeline(
+                run_extraction_phase(
                     pages=[page],
                     config=_make_config(
                         layout=layout,
@@ -142,7 +142,7 @@ def test_run_pipeline_does_not_fall_back_for_permanent_errors(
                 )
 
 
-def test_run_pipeline_propagates_when_fallback_disabled(
+def test_run_extraction_phase_propagates_when_fallback_disabled(
     tmp_path: Path,
 ) -> None:
     page = _page(1)
@@ -156,7 +156,7 @@ def test_run_pipeline_propagates_when_fallback_disabled(
                 APITimeoutError(request=httpx.Request("GET", "https://example.test"))
             )
             with pytest.raises(APITimeoutError):
-                run_pipeline(
+                run_extraction_phase(
                     pages=[page],
                     config=_make_config(
                         layout=layout,
@@ -182,7 +182,7 @@ def _raise_task_output_validation_error() -> None:
     raise err
 
 
-def test_run_pipeline_falls_back_after_task_output_validation_error(
+def test_run_extraction_phase_falls_back_after_task_output_validation_error(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -195,7 +195,7 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
         with patch.object(extraction, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _raise_task_output_validation_error
             caplog.set_level(logging.INFO, logger="pdf2md_agent.runner")
-            results = run_pipeline(
+            results = run_extraction_phase(
                 pages=[page],
                 config=_make_config(
                     layout=layout,
@@ -214,7 +214,7 @@ def test_run_pipeline_falls_back_after_task_output_validation_error(
     )
 
 
-def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
+def test_run_extraction_phase_propagates_validation_error_when_fallback_disabled(
     tmp_path: Path,
 ) -> None:
     page = _page(1)
@@ -226,7 +226,7 @@ def test_run_pipeline_propagates_validation_error_when_fallback_disabled(
         with patch.object(extraction, "Crew") as crew_cls:
             crew_cls.return_value.kickoff = _raise_task_output_validation_error
             with pytest.raises(ValidationError):
-                run_pipeline(
+                run_extraction_phase(
                     pages=[page],
                     config=_make_config(
                         layout=layout,

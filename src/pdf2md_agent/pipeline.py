@@ -16,12 +16,9 @@ from pdf2md_agent.config import (
     TOKEN_BUDGET_SAFETY,
     ConversionConfig,
 )
-from pdf2md_agent.crew.runner import run_pipeline
+from pdf2md_agent.crew.orchestrator import run_extraction_phase
 from pdf2md_agent.crew.types import RenderedPage
-from pdf2md_agent.pdf_renderer import (
-    render_pages as _render_pages,
-    render_pdf as render_pdf,  # noqa: F401
-)
+from pdf2md_agent.pdf_renderer import render_pages
 from pdf2md_agent.post_stream import StitchMode, stitch_pages
 from pdf2md_agent.vision import make_vision_llm
 
@@ -61,7 +58,7 @@ def run_unified_conversion(config: ConversionConfig) -> int:
 
     # --- 步骤 1: 静态渲染与实时文本缓存同步 ---
     log.info("Step 1: rendering PDF to PNGs at %d dpi%s...", config.dpi, " (subset)" if config.resolved_pages else "")
-    pages: list[RenderedPage] = _render_pages(config)
+    pages: list[RenderedPage] = render_pages(config)
     log.info("Step 1 done: rendered %d page(s) to %s", len(pages), config.render_target)
 
     # --- 步骤 2: 并行的逐页 AI 提取循环 ---
@@ -81,7 +78,7 @@ def run_unified_conversion(config: ConversionConfig) -> int:
         config.image_long_side,
         config.image_jpeg_quality,
     )
-    results = run_pipeline(
+    results = run_extraction_phase(
         pages=pages,
         config=config,
         llm=llm,
@@ -108,8 +105,7 @@ __all__ = [
     "check_meta_matches",
     "make_vision_llm",
     "read_meta",
-    "render_pdf",
-    "run_pipeline",
+    "run_extraction_phase",
     "run_unified_conversion",
     "stitch_pages",
     "write_meta",

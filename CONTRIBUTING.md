@@ -16,7 +16,7 @@ uv run pdf2md-agent --help
 ## Running a single test
 
 ```bash
-uv run pytest tests/test_runner.py -k extract_then_format -v
+uv run pytest tests/test_orchestrator.py -k extract_then_format -v
 ```
 
 ## What to work on

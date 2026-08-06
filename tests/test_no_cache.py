@@ -10,9 +10,9 @@ import pytest
 from pdf2md_agent import cli
 from pdf2md_agent.cache import CacheLayout, CacheNoCacheFlags
 from pdf2md_agent.config import ConversionConfig
-from pdf2md_agent.crew import runner
+from pdf2md_agent.crew import orchestrator
 from pdf2md_agent.crew import extraction
-from pdf2md_agent.crew.runner import run_pipeline
+from pdf2md_agent.crew.orchestrator import run_extraction_phase
 from pdf2md_agent.crew.types import PageRunContext, RenderedPage
 from pdf2md_agent.llm_retry import RetryConfig
 
@@ -149,7 +149,7 @@ def test_no_cache_format_reruns_full_pipeline(tmp_path: Path, monkeypatch: pytes
         patch.object(extraction, "Crew") as crew_cls,
     ):
         crew_cls.return_value.kickoff = _track
-        results = run_pipeline(
+        results = run_extraction_phase(
             pages=[page],
             config=_make_config(layout=layout, no_cache=CacheNoCacheFlags(format=True)),
             llm=object(),  # type: ignore[arg-type]
@@ -176,7 +176,7 @@ def test_trust_format_short_circuits_full_pipeline(tmp_path: Path) -> None:
         patch.object(extraction, "Crew") as crew_cls,
     ):
         crew_cls.return_value.kickoff = _track
-        results = run_pipeline(
+        results = run_extraction_phase(
             pages=[page],
             config=_make_config(layout=layout),
             llm=object(),  # type: ignore[arg-type]

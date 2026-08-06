@@ -15,15 +15,15 @@ Flat directory; one module-level test file per source module. No `conftest.py`, 
 | `src/pdf2md_agent/post_stream.py` | `test_post_stream.py` |
 | `src/pdf2md_agent/image_budget.py` & `token_estimator.py` | `test_token_budget.py` |
 | `src/pdf2md_agent/vision.py` | `test_vision.py` |
-| `src/pdf2md_agent/crew/runner.py` | `test_runner.py`, `test_no_cache.py` |
-| `src/pdf2md_agent/crew/multimodal_patch.py` | `test_d8_coverage.py` (encoding helpers), `test_runner.py` (via `make_vision_llm` patch) |
+| `src/pdf2md_agent/crew/orchestrator.py` | `test_orchestrator.py`, `test_no_cache.py` |
+| `src/pdf2md_agent/crew/multimodal_patch.py` | `test_d8_coverage.py` (encoding helpers), `test_orchestrator.py` (via `make_vision_llm` patch) |
 
 ## INVOCATION
 
 ```bash
 uv run pytest                    # full suite (no API calls)
 uv run pytest -ra tests/         # CI-equivalent: summary, no passed lines
-uv run pytest tests/test_runner.py -k falls_back -v   # single test
+uv run pytest tests/test_orchestrator.py -k falls_back -v   # single test
 ```
 
 `pyproject.toml` `[tool.pytest.ini_options]`: `pythonpath = ["src"]`, `testpaths = ["tests"]`, `addopts = ["-ra"]`.
@@ -58,7 +58,7 @@ uv run pytest tests/test_runner.py -k falls_back -v   # single test
 
 ## REPRESENTATIVE PATTERNS
 
-1. **Happy-path runner** (`test_runner.py`): synthesizes layout + page → patches all maker functions + `Crew.kickoff` → asserts result markdown and on-disk files.
+1. **Happy-path runner** (`test_orchestrator.py`): synthesizes layout + page → patches all maker functions + `Crew.kickoff` → asserts result markdown and on-disk files.
 2. **Cache fingerprinting** (`test_cache.py`): parametrized field-diff detection via `check_meta_matches`.
 3. **Retry backoff** (`test_llm_retry.py`): tracks `sleeps` list injected via `sleep=` kwarg → validates Fibonacci sequence (`1, 1, 2, 3, 5, 8, 13…`).
 4. **Stitcher buffering** (`test_post_stream.py`): feeds pages to `StreamingStitcher` via `feed()` → `finalize()`, asserts no `---` separator in merged output.

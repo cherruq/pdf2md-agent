@@ -34,7 +34,7 @@
 否则会发生自我死锁。
 
 签名故意保持不变 —— 测试会对
-``pdf2md_agent.crew.runner.<name>`` 进行打补丁，闭包重构将
+``pdf2md_agent.crew.orchestrator.<name>`` 进行打补丁，闭包重构将
 使这些补丁目标失效。幂等的安装（只有第一次调用实际安装了修补后的 ``_run``）原样保留。
 """
 

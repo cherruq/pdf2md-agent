@@ -11,7 +11,7 @@ per-page helpers, and a load-bearing monkey-patch on CrewAI's
 | `__init__.py` | empty marker | |
 | `agents.py` | 1 persona + agent factory | `make_extractor` |
 | `tasks.py` | crewAI task builders + `patch_add_image_tool()` call | `make_extract_task` |
-| `runner.py` | per-page pipeline orchestrator (Step 2) | `run_pipeline`, `step2_extract_pages`, `_process_single_page` |
+| `runner.py` | per-page pipeline orchestrator (Step 2) | `run_extraction_phase`, `step2_extract_pages`, `_process_single_page` |
 | `extraction.py` | per-page extraction loop | `run_extraction_loop` |
 | `page_image.py` | token-budget planning + downscale + tile splitting | `prepare_page_image`, `_resize_page_png`, `_make_tiles` |
 | `fallback.py` | text-layer fallback markdown | `_text_layer_fallback`, `_record_text_layer_fallback`, `FallbackRecord` |
@@ -23,7 +23,7 @@ per-page helpers, and a load-bearing monkey-patch on CrewAI's
 
 | Symbol | File | Role |
 |---|---|---|
-| `run_pipeline` | runner.py | `CacheNoCacheFlags`-driven per-page pipeline (format short-circuit → full) |
+| `run_extraction_phase` | runner.py | `CacheNoCacheFlags`-driven per-page pipeline (format short-circuit → full) |
 | `run_extraction_loop` | extraction.py | One page's extraction loop |
 | `prepare_page_image` | page_image.py | Estimate persona + prompt + image cost, downscale or tile the page |
 | `_record_text_layer_fallback` | fallback.py | Write the fenced text-layer stub on retry exhaustion / validation error |
@@ -40,7 +40,7 @@ per-page helpers, and a load-bearing monkey-patch on CrewAI's
 
 - **Persona strings are short** (~60 words each) to fit `MiniMax-M3`'s 512K-1M context window alongside the page image. Length budgeted in `image_budget.py` before pipeline start.
 - **Persona shape**: `"<role-text>\n\n<backstory-text>"` — CrewAI's `Agent(backstory=...)` only reads what's after the first `\n\n`. `_persona_backstory()` does the partition.
-- **Re-exports with `noqa: F401`** in `runner.py` for every helper tests patch (`render_pdf`, `RenderedPage`, `make_vision_llm`, `Crew`, `make_extractor`, `make_extract_task`, `_output`, `_strip_think`, `_record_text_layer_fallback`, `_text_layer_fallback`, `_resize_page_png`). Tests patch at `pdf2md_agent.crew.runner.<name>` — do not remove the re-exports.
+- **Re-exports with `noqa: F401`** in `runner.py` for every helper tests patch (`render_pdf`, `RenderedPage`, `make_vision_llm`, `Crew`, `make_extractor`, `make_extract_task`, `_output`, `_strip_think`, `_record_text_layer_fallback`, `_text_layer_fallback`, `_resize_page_png`). Tests patch at `pdf2md_agent.crew.orchestrator.<name>` — do not remove the re-exports.
 - **Patch-surface preservation**: `extraction.py` looks up the agent / task factories and `Crew` via the `runner` module's namespace (``runner.make_extractor``, etc.) so test patches at ``runner.*`` are honored at the call sites. ``runner.py`` lazy-imports ``extraction.py`` to keep this loop acyclic.
 - **`patch_add_image_tool()` is invoked at import time** from `tasks.py`. Tests that need different dims can re-call it; module-level `_active_long_side` / `_active_jpeg_quality` are updated in place without reinstalling the patch.
 - **`<think>` / `</think>` escaping**: written as `chr(60) + "think" + chr(62)` in `tasks.py` and `output.py` — avoids mangling by downstream XML-processing tools. Do not "refactor" to literal `<think>`.
@@ -53,8 +53,8 @@ per-page helpers, and a load-bearing monkey-patch on CrewAI's
   - line 45 — `UnidentifiedImageError = OSError` fallback when `PIL.UnidentifiedImageError` isn't importable
   - line 153 — `# type: ignore[override]` (parent `BaseTool._run` has a different signature)
   - line 161 — `# type: ignore[assignment]` (assigning onto foreign class method)
-- **NEVER strip the `# noqa: F401` re-exports in `runner.py`** — tests patch `pdf2md_agent.crew.runner.render_pdf`, `make_vision_llm`, `Crew`, the agent / task factories, etc. at these names; removing them forces `create=True` and breaks the test surface.
-- **NEVER import `crewai.tools.agent_tools.add_image_tool` directly in tests.** Tests must monkeypatch `pdf2md_agent.crew.runner.make_vision_llm` (and friends). Direct import path bypasses the patched `_run` and reintroduces the original bug.
+- **NEVER strip the `# noqa: F401` re-exports in `runner.py`** — tests patch `pdf2md_agent.crew.orchestrator.render_pdf`, `make_vision_llm`, `Crew`, the agent / task factories, etc. at these names; removing them forces `create=True` and breaks the test surface.
+- **NEVER import `crewai.tools.agent_tools.add_image_tool` directly in tests.** Tests must monkeypatch `pdf2md_agent.crew.orchestrator.make_vision_llm` (and friends). Direct import path bypasses the patched `_run` and reintroduces the original bug.
 - **NEVER catch and suppress `ValidationError` inside `run_extraction_loop`** — the fallback path `_record_text_layer_fallback` depends on it propagating.
 - **NEVER narrow `except BaseException` to `Exception`** in `extraction.py` (per-page retry-exhaustion path). It is intentional for cleanup before re-raise.
 
@@ -64,4 +64,4 @@ per-page helpers, and a load-bearing monkey-patch on CrewAI's
 - The patch returns `str` (the `VISION_IMAGE:` sentinel), not a dict. CrewAI's `StepExecutor` requires the str shape; tests assert on the str.
 - Tasks propagate `_NO_REASONING` (the chr-escaped phrase) into the agent's `system` instruction to keep prompts tight.
 - `--no-cache-format` short-circuits the entire per-page pipeline when `format.md` is on disk (uses `is_page_complete` in `cache.py`).
-- `crew/results.py` holds `PageResult` so both `crew/runner.py` and `crew/fallback.py` (and `post_stream.py`) can construct one without an import cycle.
+- `crew/results.py` holds `PageResult` so both `crew/orchestrator.py` and `crew/fallback.py` (and `post_stream.py`) can construct one without an import cycle.

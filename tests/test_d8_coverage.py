@@ -3,7 +3,7 @@
 Targets (per findings.md):
 - D8-003  ``cli._resolve_layout``
 - D8-005  ``cli.cmd_convert`` (integration with mocked LLM + IO)
-- D8-006  ``pipeline.run_unified_conversion`` (mocked render/run_pipeline/stitch + atomic write)
+- D8-006  ``pipeline.run_unified_conversion`` (mocked render/run_extraction_phase/stitch + atomic write)
 - D8-007  ``runner._resize_page_png`` (Pillow resize, long-side applied)
 - D8-009  ``runner._record_text_layer_fallback`` (format.md writes)
 - D8-010  ``runner._text_layer_fallback`` (markdown stub shape)
@@ -16,7 +16,7 @@ D8-002 ``cli._atomic_write_text`` (alias for ``cache.atomic_write_text``) is
 already covered transitively by ``tests/test_misc_coverage.py::test_atomic_write_*``
 and ``tests/test_cache.py::test_atomic_write_text_*``.
 
-D8-012 is strengthened in-place in ``tests/test_runner.py`` (kept there so the
+D8-012 is strengthened in-place in ``tests/test_orchestrator.py`` (kept there so the
 test sits next to the seam it guards).
 """
 
@@ -175,7 +175,7 @@ def test_cmd_convert_happy_path_writes_output_atomically(
         patch.object(pipeline, "make_vision_llm", return_value=object()),
         patch.object(
             pipeline,
-            "run_pipeline",
+            "run_extraction_phase",
             return_value=[
                 PageResult(page_number=1, markdown="# Title\n\n- item\n"),
             ],
@@ -216,7 +216,7 @@ def test_cmd_convert_rejects_legacy_reformat_flag(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
+def test_run_extraction_phase_calls_atomic_write_text_with_stitched_markdown(
     tmp_path: Path,
 ) -> None:
     """``run_unified_conversion`` writes the stitched output via the atomic-write helper."""
@@ -238,7 +238,7 @@ def test_run_pipeline_calls_atomic_write_text_with_stitched_markdown(
         patch.object(pipeline, "make_vision_llm", return_value=object()),
         patch.object(
             pipeline,
-            "run_pipeline",
+            "run_extraction_phase",
             return_value=[
                 PageResult(page_number=1, markdown="stitched body"),
             ],

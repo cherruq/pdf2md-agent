@@ -390,7 +390,7 @@ pytest -ra tests/
 | `test_llm_retry.py` | `RetryConfig` validation + `is_transient` + backoff + timeout guard |
 | `test_token_budget.py` | `estimate_text_tokens`, `estimate_image_tokens`, `plan_for_image` |
 | `test_vision.py` | `make_vision_llm` endpoint wiring + timeout pass-through |
-| `test_runner.py` | `run_pipeline` happy-path + fallback + timeout guard |
+| `test_orchestrator.py` | `run_extraction_phase` happy-path + fallback + timeout guard |
 | `test_post_stream.py` | `StreamingStitcher` heuristic (paragraph/list/table), finalize semantics, smart CJK/Latin join |
 | `test_misc_coverage.py` | CLI argument groups, version, numeric validation, atomic write |
 | `test_d8_coverage.py` | D8 batch coverage (CLI seams, runner helpers, multimodal patch) |

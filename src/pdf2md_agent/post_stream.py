@@ -32,7 +32,7 @@ import re
 from collections.abc import Iterable, Iterator
 from enum import Enum
 
-from pdf2md_agent.crew.runner import PageResult
+from pdf2md_agent.crew.orchestrator import PageResult
 from pdf2md_agent.post_stream_decision import (
     _BLOCK_SEPARATOR,
     _decide_continuation,
@@ -67,7 +67,7 @@ def stitch_pages(
     参数
     ----------
     pages
-        每页的输出内容，来自 :func:`pdf2md_agent.crew.runner.run_pipeline`。
+        每页的输出内容，来自 :func:`pdf2md_agent.crew.orchestrator.run_extraction_phase`。
         任何可迭代对象；只遍历一次。
     mode
         参见 :class:`StitchMode`。``HEURISTIC`` 为默认值，并且

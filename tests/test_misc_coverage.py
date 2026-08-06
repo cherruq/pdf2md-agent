@@ -295,9 +295,9 @@ def test_meta_fingerprint_drift_refuses_run(tmp_path: Path) -> None:
             captured["stderr"] += msg + "\n"
 
     with (
-        patch.object(pipeline, "_render_pages", return_value=[]),
+        patch.object(pipeline, "render_pages", return_value=[]),
         patch.object(pipeline, "make_vision_llm", return_value=object()),
-        patch.object(pipeline, "run_pipeline", return_value=[]),
+        patch.object(pipeline, "run_extraction_phase", return_value=[]),
         patch.object(pipeline, "stitch_pages", return_value=""),
         patch("builtins.print", side_effect=_capture_print),
     ):
@@ -331,9 +331,9 @@ def test_meta_fingerprint_drift_bypassed_by_no_cache_all(
     pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
     with (
-        patch.object(pipeline, "_render_pages", return_value=[]),
+        patch.object(pipeline, "render_pages", return_value=[]),
         patch.object(pipeline, "make_vision_llm", return_value=object()),
-        patch.object(pipeline, "run_pipeline", return_value=[]),
+        patch.object(pipeline, "run_extraction_phase", return_value=[]),
         patch.object(pipeline, "stitch_pages", return_value=""),
     ):
         rc = cli.main(

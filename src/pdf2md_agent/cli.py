@@ -31,19 +31,7 @@ from pdf2md_agent.config import (
     resolve_ctx_limit,
 )
 from pdf2md_agent.tuning import DEFAULT_STITCH_MODE
-from pdf2md_agent.crew.runner import run_pipeline as run_pipeline  # noqa: F401
-from pdf2md_agent.llm_retry import RetryConfig
-from pdf2md_agent.pages import resolve_pages
-from pdf2md_agent.crew.types import (
-    RenderedPage as RenderedPage,  # noqa: F401
-)
-from pdf2md_agent.pdf_renderer import (
-    render_pages as _render_pages,  # noqa: F401
-    render_pdf as render_pdf,  # noqa: F401
-)
 from pdf2md_agent.pipeline import run_unified_conversion
-from pdf2md_agent.post_stream import stitch_pages as stitch_pages  # noqa: F401
-from pdf2md_agent.vision import make_vision_llm as make_vision_llm  # noqa: F401
 
 log = logging.getLogger("pdf2md-agent")
 
@@ -148,17 +136,9 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
 
 
-# 步骤 1, 2, 3 的别名，用于清晰表示三步架构
-step1_render_and_sync_cache = _render_pages
-step2_extract_pages = run_pipeline
-step3_stitch_and_clean = stitch_pages
-
 __all__ = [
     "build_parser",
     "cmd_convert",
     "main",
     "run_unified_conversion",
-    "step1_render_and_sync_cache",
-    "step2_extract_pages",
-    "step3_stitch_and_clean",
 ]
