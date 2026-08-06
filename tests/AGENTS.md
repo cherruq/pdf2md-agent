@@ -30,8 +30,8 @@ uv run pytest tests/test_runner.py -k falls_back -v   # single test
 
 ## MOCKING STRATEGY
 
-- **Patch where the name is looked up**, not where it is defined. Use `patch.object(runner, "make_extractor")`, `patch.object(runner, "Crew")`, etc. — never patch the original `pdf2md_agent.vision.make_vision_llm` directly.
-- LLM/Crew mocking: `patch.object(runner, "make_extractor")`, `patch.object(runner, "make_extract_task", return_value=extract_t)`. Make `Crew.kickoff` a `lambda: None` or a side-effect that returns the canned extractor output.
+- **Patch where the name is looked up**, not where it is defined. Use `patch.object(extraction, "make_extractor")`, `patch.object(extraction, "Crew")`, etc. — never patch the original `pdf2md_agent.vision.make_vision_llm` directly.
+- LLM/Crew mocking: `patch.object(extraction, "make_extractor")`, `patch.object(extraction, "make_extract_task", return_value=extract_t)`. Make `Crew.kickoff` a `lambda: None` or a side-effect that returns the canned extractor output.
 - Config / env manipulation: `monkeypatch.setattr(config, "OPENAI_BASE_URL", ...)` or `monkeypatch.setenv(...)`.
 - Atomic-write crash simulation: `monkeypatch.setattr("os.write", crash_after_open)`.
 - CWD-sensitive cache path tests: `monkeypatch.chdir(tmp_path)`.
@@ -52,7 +52,7 @@ uv run pytest tests/test_runner.py -k falls_back -v   # single test
 
 ## API ISOLATION RULES
 
-- **No real API calls anywhere.** Tests monkeypatch `make_vision_llm` at `pdf2md_agent.crew.runner.make_vision_llm` (the `noqa: F401` re-export at `crew/runner.py:60` exists for this exact reason).
+- **No real API calls anywhere.** Tests monkeypatch `make_vision_llm` where it is used (e.g. `pdf2md_agent.pipeline.make_vision_llm`).
 - Real PyMuPDF is used only for PDF synthesis and rendering — no network I/O.
 - For retry/backoff assertions, `call_with_retry` accepts a `sleep=` kwarg injected as a list-append so tests verify the Fibonacci sequence without sleeping.
 
@@ -67,7 +67,7 @@ uv run pytest tests/test_runner.py -k falls_back -v   # single test
 
 ## ANTI-PATTERNS (test layer)
 
-- **Do not** import `crewai.tools.agent_tools.add_image_tool` directly in any test — the direct path bypasses the monkey-patched `_run` and reintroduces the original HTTP-400 bug. Patch `pdf2md_agent.crew.runner.<name>` instead.
+- **Do not** import `crewai.tools.agent_tools.add_image_tool` directly in any test — the direct path bypasses the monkey-patched `_run` and reintroduces the original HTTP-400 bug. Patch `pdf2md_agent.crew.extraction.<name>` instead.
 - **Do not** mutate `multimodal_patch._patched`, `_active_long_side`, or `_active_jpeg_quality` without resetting in `finally`. Use `monkeypatch.setattr` to handle cleanup automatically.
 - **Do not** run tests with a real `OPENAI_API_KEY` — there is no offline-vs-online branch in the test surface. Tests assume monkeypatched LLM end-to-end.
 - **Do not** commit rendered PDFs, `.pdf2md-agent-cache/` directories, or `.env` files (root `AGENTS.md` anti-pattern applies here).
@@ -76,5 +76,5 @@ uv run pytest tests/test_runner.py -k falls_back -v   # single test
 ## NOTES
 
 - `pythonpath = ["src"]` is the only thing putting `pdf2md_agent` on the import path for tests; do not edit `tests/__init__.py` to add path hacks.
-- Failure to monkeypatch at the `crew.runner` lookup site is the most common cause of "tests pass but CI fails against a real endpoint" — keep the patch targets consistent.
+- Failure to monkeypatch at the lookup site (e.g., `crew.extraction`) is the most common cause of "tests pass but CI fails against a real endpoint" — keep the patch targets consistent.
 - The 6-field `meta.json` fingerprint is exercised end-to-end in `test_cache.py`; changing any field name in `MetaInfo` requires updating those tests.

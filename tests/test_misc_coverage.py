@@ -18,7 +18,7 @@ from pdf2md_agent.cli_parser import _safe_intermediates_dir
 from pdf2md_agent.filesystem_safety import safe_cache_stem as _safe_cache_stem
 from pdf2md_agent.cache import atomic_write_text as _atomic_write_text
 from pdf2md_agent.crew.multimodal_patch import ImageEncodeError, _encode_local_image
-from pdf2md_agent.crew.runner import _strip_think
+from pdf2md_agent.crew.output import _strip_think
 from pdf2md_agent.crew.types import PageRunContext, RenderedPage
 from pdf2md_agent.pdf_renderer import read_page_text, render_pdf
 

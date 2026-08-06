@@ -15,27 +15,11 @@ from pdf2md_agent.config import (
     MODEL_NAME,
     ConversionConfig,
 )
-from pdf2md_agent.crew.agents import (  # noqa: F401  re-exports kept for test patching surface
-    EXTRACTOR_BACKSTORY,
-    make_extractor,
-)
-from pdf2md_agent.crew.fallback import (  # noqa: F401  re-exports kept for test patching surface
-    _record_text_layer_fallback,
-    _text_layer_fallback,
-)
+from pdf2md_agent.crew.extraction import run_extraction_loop
 from pdf2md_agent.crew.multimodal_patch import patch_add_image_tool
-from pdf2md_agent.crew.output import _output, _strip_think  # noqa: F401  re-exports kept for test patching surface
-from pdf2md_agent.crew.page_image import (  # noqa: F401  re-exports kept for test patching surface
-    _resize_page_png,
-    prepare_page_image,
-)
+from pdf2md_agent.crew.page_image import prepare_page_image
 from pdf2md_agent.crew.types import PageResult, PageRunContext
-from pdf2md_agent.crew.tasks import (  # noqa: F401  re-exports kept for test patching surface
-    make_extract_task,
-)
-from crewai import Crew, Process  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.Crew` without `create=True`
-from pdf2md_agent.pdf_renderer import RenderedPage, read_page_text, render_pdf  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.RenderedPage` / `.render_pdf` without `create=True`
-from pdf2md_agent.vision import make_vision_llm  # noqa: F401  re-exported so tests can patch `pdf2md_agent.crew.runner.make_vision_llm` without `create=True`
+from pdf2md_agent.pdf_renderer import RenderedPage, read_page_text
 
 log = logging.getLogger("pdf2md_agent.runner")
 
@@ -47,9 +31,6 @@ def _process_single_page(
     llm: LLM,
 ) -> tuple[PageResult, bool]:
     """通过短路或完整的提取循环处理单个 PDF 页面。"""
-    # 延迟导入以保持 runner ↔ extraction 的导入顺序无环。
-    from pdf2md_agent.crew.extraction import run_extraction_loop
-
     ctx = replace(page.ctx, page_started=time.monotonic())
     page = replace(page, ctx=ctx)
 
@@ -154,18 +135,6 @@ def run_pipeline(
 step2_extract_pages = run_pipeline
 
 __all__ = [
-    "Crew",  # re-exported from crewai (test patch surface)
-    "RenderedPage",  # re-exported from pdf_renderer
-    "PageResult",  # re-exported from pdf2md_agent.crew.results
-    "_output",  # re-exported from pdf2md_agent.crew.output
-    "_record_text_layer_fallback",  # re-exported from pdf2md_agent.crew.fallback
-    "_resize_page_png",  # re-exported from pdf2md_agent.crew.page_image
-    "_strip_think",  # re-exported from pdf2md_agent.crew.output
-    "_text_layer_fallback",  # re-exported from pdf2md_agent.crew.fallback
-    "make_extractor",  # re-exported from pdf2md_agent.crew.agents
-    "make_extract_task",  # re-exported from pdf2md_agent.crew.tasks
-    "make_vision_llm",  # re-exported from vision
-    "render_pdf",  # re-exported from pdf2md_agent.pdf_renderer
     "run_pipeline",
     "step2_extract_pages",
 ]

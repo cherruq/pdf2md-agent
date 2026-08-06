@@ -8,11 +8,12 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from crewai import LLM, Process
+from crewai import LLM, Process, Crew
 from pydantic import ValidationError
 
 from pdf2md_agent.config import ConversionConfig
-from pdf2md_agent.crew import runner as _runner
+from pdf2md_agent.crew.agents import make_extractor
+from pdf2md_agent.crew.tasks import make_extract_task
 from pdf2md_agent.crew.fallback import _record_text_layer_fallback
 from pdf2md_agent.crew.output import _output
 from pdf2md_agent.crew.types import ExtractionOutcome, PageRunContext, PreparedPage
@@ -44,7 +45,7 @@ def _build_crew(
     **_kwargs: object,
 ) -> tuple[Any, Any]:
     """为单次尝试构建提取 crew。"""
-    extract_t = _runner.make_extract_task(
+    extract_t = make_extract_task(
         extractor,
         prepared.attach_image_path,
         text_hint=text_hint_str + penalty_prompt,
@@ -54,7 +55,7 @@ def _build_crew(
     tasks = [extract_t]
     agents_list = [extractor]
 
-    crew = _runner.Crew(
+    crew = Crew(
         agents=agents_list,
         tasks=tasks,
         process=Process.sequential,
@@ -113,7 +114,7 @@ def run_extraction_loop(
 ) -> ExtractionOutcome:
     """对单页运行提取 → (反思)。"""
     artifacts = config.layout.artifacts_for(prepared.ctx.page_number)
-    extractor = _runner.make_extractor(llm)
+    extractor = make_extractor(llm)
     coverage_text_hint = prepared.text_hint_str if config.text_hint else ""
     reflection_attempts = 0
     penalty_prompt = ""

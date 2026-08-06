@@ -91,7 +91,7 @@ pdf2md-agent/
 - Frozen + slotted `@dataclass` for value types (`ConversionConfig`, `RetryConfig`, `BudgetDecision`, `CacheLayout`, `CacheNoCacheFlags`, `MetaInfo`, `PageArtifacts`, `RenderedPage`, `PageResult`); avoid pydantic.
 - Module-local logger: `log = logging.getLogger("pdf2md_agent.<area>")` (root logger name `"pdf2md-agent"`).
 - Env vars prefixed `PDF2MD_AGENT_*`; loaded once at `config.py` import via `dotenv.load_dotenv()`. CLI flags override env.
-- Tests monkeypatch `make_vision_llm` at `pdf2md_agent.crew.runner.make_vision_llm` (re-exported `noqa: F401`) — no real API calls.
+- Tests monkeypatch `make_vision_llm` where it is used (e.g. `pdf2md_agent.pipeline.make_vision_llm`) — no real API calls.
 - Conventional Commits (`feat:`/`fix:`/`refactor:`/`test:`/`docs:`/`chore:`); branches `feat/<name>` or `fix/<name>` from `main`.
 - Cache control flags use the inverted `--no-cache-<resource>` pattern; resource names (render, text, resized, format) match the on-disk filenames exactly.
 - `# type: ignore` and `# noqa: XXXX` may only be used **with an explanatory inline comment** (CONTRIBUTING.md:57-60). Stripping the comment is a violation even if the suppression itself stays.
@@ -103,13 +103,13 @@ pdf2md-agent/
 - **Do not** import `tiktoken` — heuristic estimator in `token_estimator.py` is the budget source of truth.
 - **Do not** raise `crewai` pin above `0.80,<2` — older versions don't expose `crewai.tools.agent_tools.add_image_tool`.
 - **Do not** replace `print(..., file=sys.stderr)` in `cli.py` with logger calls — CLI user-facing errors are intentional.
-- **Do not** work around `crew/multimodal_patch.py` by importing `crewai.tools` directly in tests — patch `pdf2md_agent.crew.runner.<name>` instead.
+- **Do not** work around `crew/multimodal_patch.py` by importing `crewai.tools` directly in tests — patch `pdf2md_agent.crew.extraction.<name>` instead.
 - **Do not** strip `# type: ignore` comments in `multimodal_patch.py` — three are load-bearing (lines 45, 153, 161).
-- **Do not** strip any `# noqa: F401` re-export comments in `crew/runner.py` — tests patch every helper at `pdf2md_agent.crew.runner.<name>`; removing them forces `create=True` and breaks the test surface.
+
 - **Do not** strip the `# noqa: BLE001` comments in `llm_retry.py` — the `is_transient` predicate below discriminates, and the daemon-thread joiner re-raises.
 - **Do not** commit `.env`, `.pdf2md-agent-cache/`, `.venv/`, rendered PDFs.
 - **Do not** bring back `--resume` or `--reformat` — the path-B rename is permanent. Use `--no-cache-format` (full extraction re-run).
-- **Do not** move the lazy import of `pdf2md_agent.crew.extraction.run_extraction_loop` to module top in `crew/runner.py` — it's lazy specifically so the runner ↔ extraction import order stays acyclic (extraction looks up agent / task factories via the runner namespace to preserve the test patch surface).
+
 
 ## COMMANDS
 

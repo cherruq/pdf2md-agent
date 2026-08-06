@@ -45,12 +45,12 @@ from pdf2md_agent.crew.types import (
     PageRunContext,
     PageResult,
 )
-from pdf2md_agent.crew.runner import (
-    _output,
+from pdf2md_agent.crew.output import _output
+from pdf2md_agent.crew.fallback import (
     _record_text_layer_fallback,
-    _resize_page_png,
     _text_layer_fallback,
 )
+from pdf2md_agent.crew.page_image import _resize_page_png
 from pdf2md_agent.crew.types import RenderedPage
 
 
